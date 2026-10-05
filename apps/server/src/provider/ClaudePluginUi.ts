@@ -57,6 +57,7 @@ export class ClaudePluginUi extends Context.Service<ClaudePluginUi, ClaudePlugin
   "t3/provider/ClaudePluginUi",
 ) {}
 
+/** A plain object, not null or an array. */
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -73,6 +74,7 @@ export const bandFromRenderResponse = (envelope: unknown): ClaudePluginUiElement
   return tree as unknown as ClaudePluginUiElement;
 };
 
+/** Builds the service: per-thread plugin UI state, band renders, and subscriber signals. */
 export const make = Effect.sync(() => {
   const threads = new Map<ThreadId, ThreadEntry>();
   let toastCount = 0;
@@ -81,6 +83,7 @@ export const make = Effect.sync(() => {
   // backlog of snapshots.
   const watchers = new Map<ThreadId, Set<Queue.Queue<void>>>();
 
+  /** The thread's entry, created empty on first use. */
   const entryFor = (threadId: ThreadId): ThreadEntry => {
     let entry = threads.get(threadId);
     if (entry === undefined) {
@@ -95,6 +98,7 @@ export const make = Effect.sync(() => {
     return entry;
   };
 
+  /** Applies `next` to the thread's snapshot and signals its subscribers when it changed. */
   const update = (
     threadId: ThreadId,
     next: (snapshot: ClaudePluginUiSnapshot) => ClaudePluginUiSnapshot,
@@ -126,6 +130,7 @@ export const make = Effect.sync(() => {
       }
     });
 
+  /** Asks the CLI to draw the AbovePrompt band and stores the tree if this query is still current. */
   const renderBand = (threadId: ThreadId, request: ClaudeControlRequest) =>
     Effect.tryPromise(() =>
       request({
@@ -185,12 +190,14 @@ export const make = Effect.sync(() => {
       );
     });
 
+  /** Registers a thread's live query and asks it for the band. */
   const attach: ClaudePluginUiShape["attach"] = (threadId, request) =>
     Effect.suspend(() => {
       entryFor(threadId).request = request;
       return requestRender(threadId);
     });
 
+  /** Clears a thread's plugin UI when the query that attached it closes. */
   const detach: ClaudePluginUiShape["detach"] = (threadId, request) =>
     Effect.suspend(() => {
       const entry = threads.get(threadId);
@@ -202,6 +209,7 @@ export const make = Effect.sync(() => {
       );
     });
 
+  /** Applies one `ui_status`, `ui_toast` or `ui_invalidate` message from the current query. */
   const ingest: ClaudePluginUiShape["ingest"] = (threadId, message, from) => {
     if (!isRecord(message) || message.type !== "system") return Effect.void;
     // A late message from a replaced query must not draw over the current one.
@@ -239,6 +247,7 @@ export const make = Effect.sync(() => {
     }
   };
 
+  /** The thread's current snapshot, then the latest one after each change. */
   const subscribe: ClaudePluginUiShape["subscribe"] = (threadId) =>
     Stream.unwrap(
       Effect.gen(function* () {
@@ -264,6 +273,7 @@ export const make = Effect.sync(() => {
       }),
     );
 
+  /** Forwards a plugin Button press to the thread's live query. */
   const press: ClaudePluginUiShape["press"] = (input) =>
     Effect.suspend(() => {
       const request = threads.get(input.threadId)?.request;
@@ -287,4 +297,5 @@ export const make = Effect.sync(() => {
   return ClaudePluginUi.of({ attach, detach, ingest, subscribe, press });
 });
 
+/** Provides the shared ClaudePluginUi service. */
 export const layer = Layer.effect(ClaudePluginUi, make);

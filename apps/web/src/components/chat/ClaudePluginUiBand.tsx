@@ -91,9 +91,11 @@ export function ClaudePluginUiBand(props: {
 
 type Press = (target: { plugin: string; handle: number }, key: string | undefined) => void;
 
+/** A horizontal size in terminal cells (`ch`); strings pass through as CSS. */
 const cells = (value: unknown): string | undefined =>
   typeof value === "number" ? `${value}ch` : typeof value === "string" ? value : undefined;
 
+/** A vertical size in terminal rows; strings pass through as CSS. */
 const lines = (value: unknown): string | undefined =>
   typeof value === "number" ? `${value * 1.25}em` : typeof value === "string" ? value : undefined;
 
@@ -101,6 +103,7 @@ const lines = (value: unknown): string | undefined =>
 const color = (value: unknown): string | undefined =>
   typeof value === "string" && !value.startsWith("ansi") ? value : undefined;
 
+/** Maps an Ink-style Box's layout props to flexbox CSS. */
 function boxStyle(props: Readonly<Record<string, unknown>>): CSSProperties {
   const style: CSSProperties = {
     display: props.display === "none" ? "none" : "flex",
@@ -143,6 +146,7 @@ function boxStyle(props: Readonly<Record<string, unknown>>): CSSProperties {
   return style;
 }
 
+/** Maps an Ink-style Text's color and style props to CSS. */
 function textStyle(props: Readonly<Record<string, unknown>>): CSSProperties {
   const inverse = props.inverse === true;
   const fg = color(props.color);
@@ -263,6 +267,7 @@ function blockStyle(mask: number, count: number): CSSProperties {
 /** Full and half blocks look the same at any width, so their runs draw as one box. */
 const MERGEABLE_MASKS = new Set([15, 12, 3]);
 
+/** Draws a string, painting block elements as boxes and everything else as text. */
 function renderText(text: string, key: string): ReactNode {
   const chars = [...text];
   if (!chars.some((char) => char in BLOCK_QUADRANTS)) {
@@ -299,6 +304,7 @@ function renderText(text: string, key: string): ReactNode {
   );
 }
 
+/** Draws a node's children in order. */
 function renderChildren(
   children: ReadonlyArray<ClaudePluginUiChild> | undefined,
   path: string,
@@ -312,6 +318,7 @@ function renderChildren(
   );
 }
 
+/** Draws one plugin tree node from the desktop element table; unknown types draw nothing. */
 function renderNode(node: ClaudePluginUiElement, path: string, press: Press): ReactNode {
   const props = node.props ?? {};
   const key = typeof props.key === "string" ? props.key : path;
