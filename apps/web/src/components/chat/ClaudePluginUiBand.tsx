@@ -1,8 +1,9 @@
-import type {
-  ClaudePluginUiChild,
-  ClaudePluginUiElement,
-  EnvironmentId,
-  ThreadId,
+import {
+  CLAUDE_PLUGIN_UI_BAND_COLUMNS,
+  type ClaudePluginUiChild,
+  type ClaudePluginUiElement,
+  type EnvironmentId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { type CSSProperties, type ReactNode, useEffect, useRef } from "react";
 
@@ -64,8 +65,15 @@ export function ClaudePluginUiBand(props: {
   return (
     <div className="mx-auto mb-1.5 flex w-full max-w-208 flex-col gap-1 px-1 font-mono text-xs leading-tight">
       {snapshot.band === null ? null : (
-        <div className="overflow-x-auto rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 leading-none">
-          {renderNode(snapshot.band, "band", press)}
+        <div className="overflow-x-auto rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 leading-none [container-type:inline-size]">
+          {/* Shrink below text-xs when the composer is narrower than the plugin's columns. */}
+          <div
+            style={{
+              fontSize: `min(0.75rem, calc(100cqi / ${CLAUDE_PLUGIN_UI_BAND_COLUMNS * MONO_CH_EM}))`,
+            }}
+          >
+            {renderNode(snapshot.band, "band", press)}
+          </div>
         </div>
       )}
       {snapshot.statuses.length === 0 ? null : (
@@ -199,6 +207,98 @@ function safeHref(value: unknown): string | undefined {
   }
 }
 
+/** Width of one monospace cell in em (SF Mono and Menlo are 0.6). */
+const MONO_CH_EM = 0.6;
+
+// Block elements drawn as shapes, not glyphs: a font's block glyphs leave
+// anti-aliased seams between cells, which stripes plugin pixel art.
+// Quadrant bits: 8 top-left, 4 top-right, 2 bottom-left, 1 bottom-right.
+const BLOCK_QUADRANTS: Readonly<Record<string, number>> = {
+  "█": 15,
+  "▀": 12,
+  "▄": 3,
+  "▌": 10,
+  "▐": 5,
+  "▘": 8,
+  "▝": 4,
+  "▖": 2,
+  "▗": 1,
+  "▙": 11,
+  "▛": 14,
+  "▜": 13,
+  "▟": 7,
+  "▚": 9,
+  "▞": 6,
+};
+const QUADRANT_POSITIONS: ReadonlyArray<readonly [number, string]> = [
+  [8, "0 0"],
+  [4, "100% 0"],
+  [2, "0 100%"],
+  [1, "100% 100%"],
+];
+const SOLID = "linear-gradient(currentColor, currentColor)";
+
+/**
+ * One block element, or a run of `count` identical full or half blocks, as a
+ * painted box. Boxes overlap their right and bottom neighbours by half a pixel
+ * so fractional cell edges never leave a seam.
+ */
+function blockStyle(mask: number, count: number): CSSProperties {
+  const layers = QUADRANT_POSITIONS.filter(([bit]) => (mask & bit) !== 0);
+  const half = "calc(50% + 0.5px)";
+  return {
+    display: "inline-block",
+    width: `calc(${count}ch + 0.5px)`,
+    marginRight: "-0.5px",
+    height: "calc(1lh + 0.5px)",
+    marginBottom: "-0.5px",
+    verticalAlign: "top",
+    backgroundImage: layers.map(() => SOLID).join(", "),
+    backgroundPosition: layers.map(([, position]) => position).join(", "),
+    backgroundSize: count === 1 ? `${half} ${half}` : mask === 15 ? "100% 100%" : `100% ${half}`,
+    backgroundRepeat: "no-repeat",
+  };
+}
+
+/** Full and half blocks look the same at any width, so their runs draw as one box. */
+const MERGEABLE_MASKS = new Set([15, 12, 3]);
+
+function renderText(text: string, key: string): ReactNode {
+  const chars = [...text];
+  if (!chars.some((char) => char in BLOCK_QUADRANTS)) {
+    return (
+      <span key={key} className="whitespace-pre-wrap">
+        {text}
+      </span>
+    );
+  }
+  const parts: ReactNode[] = [];
+  let plain = "";
+  for (let index = 0; index < chars.length;) {
+    const char = chars[index] as string;
+    const mask = BLOCK_QUADRANTS[char];
+    if (mask === undefined) {
+      plain += char;
+      index += 1;
+      continue;
+    }
+    if (plain !== "") {
+      parts.push(plain);
+      plain = "";
+    }
+    let count = 1;
+    if (MERGEABLE_MASKS.has(mask)) while (chars[index + count] === char) count += 1;
+    parts.push(<span key={index} aria-hidden style={blockStyle(mask, count)} />);
+    index += count;
+  }
+  if (plain !== "") parts.push(plain);
+  return (
+    <span key={key} className="whitespace-pre">
+      {parts}
+    </span>
+  );
+}
+
 function renderChildren(
   children: ReadonlyArray<ClaudePluginUiChild> | undefined,
   path: string,
@@ -206,14 +306,9 @@ function renderChildren(
 ): ReactNode {
   // A plugin's tree is positional: its children carry no ids of their own.
   return children?.map((child, index) =>
-    typeof child === "string" ? (
-      // oxlint-disable-next-line react/no-array-index-key
-      <span key={`${path}.${index}`} className="whitespace-pre-wrap">
-        {child}
-      </span>
-    ) : (
-      renderNode(child, `${path}.${index}`, press)
-    ),
+    typeof child === "string"
+      ? renderText(child, `${path}.${index}`)
+      : renderNode(child, `${path}.${index}`, press),
   );
 }
 

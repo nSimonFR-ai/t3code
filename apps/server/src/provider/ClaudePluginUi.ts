@@ -14,6 +14,7 @@
  * leaves the thread without plugin UI; it never affects a turn.
  */
 import {
+  CLAUDE_PLUGIN_UI_BAND_COLUMNS,
   type ClaudePluginUiElement,
   type ClaudePluginUiPressInput,
   type ClaudePluginUiSnapshot,
@@ -31,7 +32,6 @@ export type ClaudeControlRequest = (request: Record<string, unknown>) => Promise
 
 const BAND_INSTANCE_ID = "above-prompt";
 const BAND_MAX_ROWS = 12;
-const BAND_COLUMNS = 80;
 
 interface ThreadEntry {
   request: ClaudeControlRequest | undefined;
@@ -115,7 +115,7 @@ export const make = Effect.gen(function* () {
           hasSurvey: false,
           isWorking: false,
           maxRows: BAND_MAX_ROWS,
-          bodyColumns: BAND_COLUMNS,
+          bodyColumns: CLAUDE_PLUGIN_UI_BAND_COLUMNS,
           scroll: { offset: 0, bodyRows: BAND_MAX_ROWS },
         },
       }),

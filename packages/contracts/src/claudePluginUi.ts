@@ -78,6 +78,12 @@ export const ClaudePluginUiPressInput = Schema.Struct({
 });
 export type ClaudePluginUiPressInput = typeof ClaudePluginUiPressInput.Type;
 
+/**
+ * Terminal columns the band is laid out for. The server asks plugins to fit
+ * this width; clients scale the font so it fits theirs.
+ */
+export const CLAUDE_PLUGIN_UI_BAND_COLUMNS = 100;
+
 export const EMPTY_CLAUDE_PLUGIN_UI_SNAPSHOT: ClaudePluginUiSnapshot = {
   statuses: [],
   band: null,
