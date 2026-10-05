@@ -26,7 +26,7 @@ describe("ClaudePluginUi", () => {
     Effect.gen(function* () {
       const service = yield* ClaudePluginUi.make;
       const status = (plugin: string, text: string | null) =>
-        service.ingest(threadId, { type: "system", subtype: "ui_status", plugin, text });
+        service.ingest(threadId, { type: "system", subtype: "ui_status", plugin, text }, undefined);
 
       yield* status("tier-badge", "T1 small");
       yield* status("usage-deck", "ctx 40%");
@@ -46,14 +46,18 @@ describe("ClaudePluginUi", () => {
   it.effect("keeps the latest toast with its id and timeout", () =>
     Effect.gen(function* () {
       const service = yield* ClaudePluginUi.make;
-      yield* service.ingest(threadId, {
-        type: "system",
-        subtype: "ui_toast",
-        plugin: "blast-radius",
-        text: "3 files touched",
-        timeout_ms: 2500,
-        uuid: "toast-uuid",
-      });
+      yield* service.ingest(
+        threadId,
+        {
+          type: "system",
+          subtype: "ui_toast",
+          plugin: "blast-radius",
+          text: "3 files touched",
+          timeout_ms: 2500,
+          uuid: "toast-uuid",
+        },
+        undefined,
+      );
       assert.deepStrictEqual((yield* latest(service)).toast, {
         id: "toast-uuid",
         plugin: "blast-radius",
@@ -81,7 +85,7 @@ describe("ClaudePluginUi", () => {
       assert.strictEqual(requests[0]?.component, "AbovePrompt");
 
       hooked = false;
-      yield* service.ingest(threadId, { type: "system", subtype: "ui_invalidate" });
+      yield* service.ingest(threadId, { type: "system", subtype: "ui_invalidate" }, request);
       const cleared = yield* awaitSnapshot(service, (snapshot) => snapshot.band === null);
       assert.strictEqual(cleared.band, null);
     }),
@@ -112,12 +116,11 @@ describe("ClaudePluginUi", () => {
       const first: ClaudePluginUi.ClaudeControlRequest = async () => ({ hooked: false });
       const second: ClaudePluginUi.ClaudeControlRequest = async () => ({ hooked: false });
       yield* service.attach(threadId, first);
-      yield* service.ingest(threadId, {
-        type: "system",
-        subtype: "ui_status",
-        plugin: "tier-badge",
-        text: "T1",
-      });
+      yield* service.ingest(
+        threadId,
+        { type: "system", subtype: "ui_status", plugin: "tier-badge", text: "T1" },
+        first,
+      );
       yield* service.attach(threadId, second);
 
       yield* service.detach(threadId, first);
@@ -147,6 +150,49 @@ describe("ClaudePluginUi", () => {
       resolveRender({ subtype: "success", response: { tree: band, hooked: true } });
       yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)));
       assert.strictEqual((yield* latest(service)).band, null);
+    }),
+  );
+
+  it.effect("ignores UI from a query that has been replaced", () =>
+    Effect.gen(function* () {
+      const service = yield* ClaudePluginUi.make;
+      const old: ClaudePluginUi.ClaudeControlRequest = async () => ({ hooked: false });
+      const replacement: ClaudePluginUi.ClaudeControlRequest = async () => ({ hooked: false });
+      const status = (text: string, from: ClaudePluginUi.ClaudeControlRequest) =>
+        service.ingest(threadId, { type: "system", subtype: "ui_status", plugin: "p", text }, from);
+      yield* service.attach(threadId, old);
+      yield* service.attach(threadId, replacement);
+      yield* status("late from the old query", old);
+      assert.deepStrictEqual((yield* latest(service)).statuses, []);
+      yield* status("current", replacement);
+      assert.deepStrictEqual((yield* latest(service)).statuses, [{ plugin: "p", text: "current" }]);
+    }),
+  );
+
+  it.effect("a slow subscriber gets the latest snapshot, not a backlog", () =>
+    Effect.gen(function* () {
+      const service = yield* ClaudePluginUi.make;
+      let published = false;
+      // While the subscriber handles its first snapshot, 100 updates land.
+      const seen = yield* service.subscribe(threadId).pipe(
+        Stream.tap(() =>
+          published
+            ? Effect.void
+            : Effect.gen(function* () {
+                published = true;
+                for (let i = 0; i < 100; i += 1) {
+                  yield* service.ingest(
+                    threadId,
+                    { type: "system", subtype: "ui_status", plugin: "p", text: `v${i}` },
+                    undefined,
+                  );
+                }
+              }),
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+      );
+      assert.deepStrictEqual([...seen][1]?.statuses, [{ plugin: "p", text: "v99" }]);
     }),
   );
 

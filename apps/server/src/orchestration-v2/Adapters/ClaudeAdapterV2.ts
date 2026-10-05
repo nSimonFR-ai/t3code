@@ -668,7 +668,7 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
                 payload: message,
               }),
             ),
-            Stream.tap((message) => pluginUi.ingest(input.threadId, message)),
+            Stream.tap((message) => pluginUi.ingest(input.threadId, message, pluginUiRequest)),
           ),
           offer: (message) =>
             Queue.offer(promptQueue, message).pipe(

@@ -24,7 +24,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 /** Sends one control request on the thread's live Claude query. */
@@ -40,15 +40,15 @@ interface ThreadEntry {
   renderAgain: boolean;
 }
 
-interface Change {
-  readonly threadId: ThreadId;
-  readonly snapshot: ClaudePluginUiSnapshot;
-}
-
 export interface ClaudePluginUiShape {
   readonly attach: (threadId: ThreadId, request: ClaudeControlRequest) => Effect.Effect<void>;
   readonly detach: (threadId: ThreadId, request: ClaudeControlRequest) => Effect.Effect<void>;
-  readonly ingest: (threadId: ThreadId, message: unknown) => Effect.Effect<void>;
+  /** `from` is the sending query's control-request sender; messages from a replaced query are dropped. */
+  readonly ingest: (
+    threadId: ThreadId,
+    message: unknown,
+    from: ClaudeControlRequest | undefined,
+  ) => Effect.Effect<void>;
   readonly subscribe: (threadId: ThreadId) => Stream.Stream<ClaudePluginUiSnapshot>;
   readonly press: (input: ClaudePluginUiPressInput) => Effect.Effect<void>;
 }
@@ -73,10 +73,13 @@ export const bandFromRenderResponse = (envelope: unknown): ClaudePluginUiElement
   return tree as unknown as ClaudePluginUiElement;
 };
 
-export const make = Effect.gen(function* () {
+export const make = Effect.sync(() => {
   const threads = new Map<ThreadId, ThreadEntry>();
   let toastCount = 0;
-  const changes = yield* PubSub.unbounded<Change>();
+  // Each subscriber's one-slot "changed" signal. A subscriber reads the current
+  // snapshot when signalled, so a slow client holds one pending signal, never a
+  // backlog of snapshots.
+  const watchers = new Map<ThreadId, Set<Queue.Queue<void>>>();
 
   const entryFor = (threadId: ThreadId): ThreadEntry => {
     let entry = threads.get(threadId);
@@ -101,7 +104,26 @@ export const make = Effect.gen(function* () {
       const snapshot = next(entry.snapshot);
       if (snapshot === entry.snapshot) return Effect.void;
       entry.snapshot = snapshot;
-      return PubSub.publish(changes, { threadId, snapshot }).pipe(Effect.asVoid);
+      return Effect.forEach(
+        watchers.get(threadId) ?? [],
+        (signal) => Queue.offer(signal, undefined),
+        {
+          discard: true,
+        },
+      );
+    });
+
+  /** Forgets a thread whose query has gone, once nothing is drawing for it. */
+  const removeIfIdle = (threadId: ThreadId, entry: ThreadEntry) =>
+    Effect.sync(() => {
+      if (
+        !entry.rendering &&
+        entry.request === undefined &&
+        entry.snapshot === EMPTY_CLAUDE_PLUGIN_UI_SNAPSHOT &&
+        threads.get(threadId) === entry
+      ) {
+        threads.delete(threadId);
+      }
     });
 
   const renderBand = (threadId: ThreadId, request: ClaudeControlRequest) =>
@@ -156,7 +178,7 @@ export const make = Effect.gen(function* () {
         Effect.ensuring(
           Effect.sync(() => {
             entry.rendering = false;
-          }),
+          }).pipe(Effect.andThen(removeIfIdle(threadId, entry))),
         ),
         Effect.forkDetach,
         Effect.asVoid,
@@ -175,11 +197,15 @@ export const make = Effect.gen(function* () {
       // A replacement query may already have attached; only its own close clears it.
       if (entry === undefined || entry.request !== request) return Effect.void;
       entry.request = undefined;
-      return update(threadId, () => EMPTY_CLAUDE_PLUGIN_UI_SNAPSHOT);
+      return update(threadId, () => EMPTY_CLAUDE_PLUGIN_UI_SNAPSHOT).pipe(
+        Effect.andThen(removeIfIdle(threadId, entry)),
+      );
     });
 
-  const ingest: ClaudePluginUiShape["ingest"] = (threadId, message) => {
+  const ingest: ClaudePluginUiShape["ingest"] = (threadId, message, from) => {
     if (!isRecord(message) || message.type !== "system") return Effect.void;
+    // A late message from a replaced query must not draw over the current one.
+    if (threads.get(threadId)?.request !== from) return Effect.void;
     switch (message.subtype) {
       case "ui_status": {
         if (typeof message.plugin !== "string") return Effect.void;
@@ -216,14 +242,24 @@ export const make = Effect.gen(function* () {
   const subscribe: ClaudePluginUiShape["subscribe"] = (threadId) =>
     Stream.unwrap(
       Effect.gen(function* () {
-        const subscription = yield* PubSub.subscribe(changes);
-        const latest = threads.get(threadId)?.snapshot ?? EMPTY_CLAUDE_PLUGIN_UI_SNAPSHOT;
+        const signal = yield* Queue.sliding<void>(1);
+        let signals = watchers.get(threadId);
+        if (signals === undefined) {
+          signals = new Set();
+          watchers.set(threadId, signals);
+        }
+        const own = signals;
+        own.add(signal);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            own.delete(signal);
+            if (own.size === 0 && watchers.get(threadId) === own) watchers.delete(threadId);
+          }),
+        );
+        const current = () => threads.get(threadId)?.snapshot ?? EMPTY_CLAUDE_PLUGIN_UI_SNAPSHOT;
         return Stream.concat(
-          Stream.make(latest),
-          Stream.fromSubscription(subscription).pipe(
-            Stream.filter((change) => change.threadId === threadId),
-            Stream.map((change) => change.snapshot),
-          ),
+          Stream.make(current()),
+          Stream.fromQueue(signal).pipe(Stream.map(() => current())),
         );
       }),
     );
