@@ -105,7 +105,7 @@ export function useIssueLinking(environmentId: EnvironmentId | null | undefined)
   const projects = useProjects();
   const config = environmentId == null ? undefined : configs.get(environmentId);
   const supported = config?.environment.capabilities.issues === true;
-  const linearBindings = config?.settings.issueTracking.connections.linear?.projectBindings;
+  const linearBindings = config?.settings?.issueTracking?.connections.linear?.projectBindings;
   const readDetail = useAtomQueryRunner(issueEnvironment.detail, {
     reportFailure: false,
     reportDefect: false,
