@@ -2,7 +2,7 @@ import type { ThreadPullRequestLink } from "@t3tools/contracts";
 import { resolveThreadPullRequestChains } from "@t3tools/shared/threadPullRequests";
 import { describe, expect, it } from "vite-plus/test";
 
-import { pullRequestListLines } from "./pullRequestListLines";
+import { issueNestedPullRequestLines, pullRequestListLines } from "./pullRequestListLines";
 
 function link(
   number: number,
@@ -72,5 +72,35 @@ describe("pullRequestListLines", () => {
       [3, 0, "native"],
       [4, 1, null],
     ]);
+  });
+});
+
+describe("issueNestedPullRequestLines", () => {
+  const tracked = (number: number, url = `https://github.com/acme/web/pull/${number}`) => ({
+    repository: "Acme/Web",
+    number,
+    title: `PR ${number}`,
+    url,
+    state: "open" as const,
+    isDraft: false,
+    closesIssue: true,
+  });
+
+  it("nests only unstacked pull requests a linked issue reports", () => {
+    const lines = pullRequestListLines(
+      resolveThreadPullRequestChains([
+        link(1, "a", "main", "2026-01-01T10:00:00Z"),
+        link(2, "b", "a", "2026-01-01T12:00:00Z"),
+        link(9, "solo", "main", "2026-01-01T11:00:00Z"),
+        link(10, "other", "main", "2026-01-01T09:00:00Z"),
+      ]),
+    );
+    const nested = issueNestedPullRequestLines(lines, [
+      tracked(1),
+      tracked(9),
+      tracked(11),
+      tracked(10, "https://gitlab.com/acme/web/-/merge_requests/10"),
+    ]);
+    expect([...nested.values()].map((line) => line.link.number)).toEqual([9]);
   });
 });

@@ -421,6 +421,8 @@ export const make = Effect.gen(function* () {
   /**
    * The project a request names, with the repository it claims checked against the project's own
    * remote: that field travels through the client, so it is never handed to a provider verbatim.
+   * A reference none of the project's sources match may still name a tracker that is not tied to
+   * the checkout, such as a Linear team, which its adapter accepts only for a connected account.
    */
   const requireProject = (
     ref: Pick<IssueRef, "projectId" | "provider" | "repository" | "host">,
@@ -428,31 +430,41 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const resolved = yield* ResolvedSource;
       if (resolved !== null) return resolved;
-      return yield* listWorkspaceProjects({ projectId: ref.projectId }).pipe(
-        Effect.flatMap(
-          ({ supported }): Effect.Effect<IssueProviderRegistry.IssueProjectSource, IssueError> => {
-            if (supported.length === 0) {
-              return Effect.fail(new IssueUnavailableError({ reason: "provider-unsupported" }));
-            }
-            const repository = ref.repository.trim().toLowerCase();
-            const match = supported.find(
-              (project) =>
-                project.repository.toLowerCase() === repository &&
-                (ref.provider === undefined || project.adapter.kind === ref.provider) &&
-                (ref.host === undefined || project.host.toLowerCase() === ref.host.toLowerCase()),
-            );
-            if (match === undefined) {
-              return Effect.fail(
-                new IssueOperationError({
-                  operation: "resolveRepository",
-                  detail: "The issue does not belong to the selected project.",
-                }),
-              );
-            }
-            return Effect.succeed(match);
-          },
+      const { supported } = yield* listWorkspaceProjects({ projectId: ref.projectId });
+      const repository = ref.repository.trim().toLowerCase();
+      const match = supported.find(
+        (project) =>
+          project.repository.toLowerCase() === repository &&
+          (ref.provider === undefined || project.adapter.kind === ref.provider) &&
+          (ref.host === undefined || project.host.toLowerCase() === ref.host.toLowerCase()),
+      );
+      if (match !== undefined) return match;
+      const shells = yield* projects.listShells({ projectIds: [ref.projectId] }).pipe(
+        Effect.mapError(
+          (error) =>
+            new IssueOperationError({
+              operation: "resolveRepository",
+              detail: "The project could not be read.",
+              cause: error,
+            }),
         ),
       );
+      const shell = shells.find((project) => project.id === ref.projectId);
+      const referenced = shell === undefined ? null : yield* registry.resolveReference(shell, ref);
+      if (referenced !== null) return referenced;
+      if (ref.provider !== undefined && registry.referenceProviders.has(ref.provider)) {
+        return yield* new IssueOperationError({
+          operation: "resolveRepository",
+          detail: `No connected ${ref.provider} account can read ${ref.repository}.`,
+        });
+      }
+      if (supported.length === 0) {
+        return yield* new IssueUnavailableError({ reason: "provider-unsupported" });
+      }
+      return yield* new IssueOperationError({
+        operation: "resolveRepository",
+        detail: "The issue does not belong to the selected project.",
+      });
     });
 
   /**

@@ -38,6 +38,10 @@ interface ThreadIssueTreesProps {
   renderFallback?: (issue: ThreadIssueLink) => ReactNode;
   /** Controls for a linked issue, shown on its row. */
   renderActions?: (issue: ThreadIssueLink) => ReactNode;
+  /** A fuller row for a tree pull request, or null to keep the tracker's short one. */
+  renderPullRequest?: (link: IssueLinkedPullRequest, depth: number) => ReactNode;
+  /** Every pull request the drawn trees list, so the caller can stop repeating them. */
+  onTreePullRequests?: (links: ReadonlyArray<IssueLinkedPullRequest>) => void;
   className?: string | undefined;
 }
 
@@ -58,6 +62,8 @@ export function ThreadIssueTrees({
   onOpenPullRequest,
   renderFallback,
   renderActions,
+  renderPullRequest,
+  onTreePullRequests,
   className,
 }: ThreadIssueTreesProps) {
   const running = threadRuntimeIsActive(useThreadShell(threadRef)?.runtime ?? null);
@@ -104,6 +110,11 @@ export function ThreadIssueTrees({
       ),
     [linked, projectFor, reads],
   );
+  const treePullRequests = useMemo(
+    () => trees.flatMap((tree) => tree.rows.flatMap((row) => row.issue.linkedPullRequests ?? [])),
+    [trees],
+  );
+  useEffect(() => onTreePullRequests?.(treePullRequests), [onTreePullRequests, treePullRequests]);
   const unread = linked.filter(
     (issue) => projectFor(issue) === null || !reads[threadIssueKey(issue)]?.detail,
   );
@@ -154,6 +165,7 @@ export function ThreadIssueTrees({
                     links={row.issue.linkedPullRequests}
                     depth={row.depth}
                     onOpen={onOpenPullRequest}
+                    renderPullRequest={renderPullRequest}
                   />
                 </Fragment>
               );

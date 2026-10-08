@@ -1,3 +1,5 @@
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type {
   IssueCapabilities,
@@ -13,7 +15,17 @@ import type {
 import * as ServerSettings from "../serverSettings.ts";
 import * as LinearConnection from "./LinearConnection.ts";
 import * as LinearApi from "./LinearApi.ts";
-import { IssueProviderError, type IssueAdapter, type ProviderIssue } from "./IssueProvider.ts";
+import {
+  IssueProviderError,
+  type IssueAdapter,
+  type IssueAdapterSource,
+  type ProviderIssue,
+} from "./IssueProvider.ts";
+
+/** A Linear team key, the letters before the dash in an identifier such as `ENG-123`. */
+const TEAM_KEY = /^[A-Za-z][A-Za-z0-9_]*$/;
+/** How long the account that can read a team is believed without asking Linear again. */
+const TEAM_ACCOUNT_CACHE_TTL = Duration.minutes(10);
 
 const CAPABILITIES: IssueCapabilities = {
   sorts: ["updated"],
@@ -195,6 +207,42 @@ export const make = Effect.gen(function* () {
     );
   const identifier = (repository: string, number: number) => `${repository}-${number}`;
 
+  const teamAccounts = new Map<
+    string,
+    { readonly at: number; readonly source: IssueAdapterSource }
+  >();
+  /**
+   * The connected account that can read a team, preferring the environment account like an
+   * unbound request does. Only answers are held: a team that is missing now may be granted later.
+   */
+  const resolveTeam = (repository: string): Effect.Effect<IssueAdapterSource | null> =>
+    Effect.gen(function* () {
+      if (!TEAM_KEY.test(repository)) return null;
+      const key = repository.toUpperCase();
+      const now = yield* Clock.currentTimeMillis;
+      const held = teamAccounts.get(key);
+      if (held !== undefined && now - held.at <= Duration.toMillis(TEAM_ACCOUNT_CACHE_TTL)) {
+        return held.source;
+      }
+      const connection = yield* api.connection;
+      const readsTeam = (projects: ReadonlyArray<{ readonly key: string }>) =>
+        projects.find((team) => team.key.toUpperCase() === key)?.key;
+      const environment = connection.environmentAccount;
+      const environmentTeam =
+        environment?.status === "authenticated" ? readsTeam(environment.projects) : undefined;
+      let source: IssueAdapterSource | null =
+        environmentTeam === undefined ? null : { host: "linear.app", repository: environmentTeam };
+      for (const account of connection.accounts) {
+        if (source !== null) break;
+        const team = account.status === "authenticated" ? readsTeam(account.projects) : undefined;
+        if (team !== undefined) {
+          source = { host: "linear.app", repository: team, credentialId: account.credentialId };
+        }
+      }
+      if (source !== null) teamAccounts.set(key, { at: now, source });
+      return source;
+    }).pipe(Effect.orElseSucceed(() => null));
+
   return {
     kind: "linear",
     tracker: yield* LinearConnection.make,
@@ -215,6 +263,7 @@ export const make = Effect.gen(function* () {
         }),
         Effect.orElseSucceed(() => null),
       ),
+    resolveReference: (_project, repository) => resolveTeam(repository),
     getViewer: ({ credentialId }) =>
       api.getViewer(credentialId === undefined ? {} : { credentialId }).pipe(
         Effect.map((viewer) => viewer.id),
