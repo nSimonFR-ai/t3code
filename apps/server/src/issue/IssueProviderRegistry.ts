@@ -270,6 +270,17 @@ export class IssueProviderRegistry extends Context.Service<
       projects: ReadonlyArray<OrchestrationProjectShell>,
       filter: IssueProjectFilter,
     ) => Effect.Effect<IssueWorkspaceProjects>;
+    /** Providers whose repositories can be named outright, independent of any project. */
+    readonly referenceProviders: ReadonlySet<IssueProviderKind>;
+    /** The first adapter that can read a repository the caller named outright, if any. */
+    readonly resolveReference: (
+      project: OrchestrationProjectShell,
+      reference: {
+        readonly repository: string;
+        readonly provider?: IssueProviderKind | undefined;
+        readonly host?: string | undefined;
+      },
+    ) => Effect.Effect<IssueProjectSource | null>;
   }
 >()("t3/issue/IssueProviderRegistry") {}
 
@@ -293,6 +304,36 @@ export const fromProviders = Effect.fn("IssueProviderRegistry.fromProviders")(fu
         : Effect.succeed(tracker);
     },
     resolveProjects: yield* projectResolver(byKind),
+    referenceProviders: new Set(
+      providers.flatMap((provider) =>
+        provider.resolveReference === undefined ? [] : [provider.kind],
+      ),
+    ),
+    resolveReference: Effect.fn("IssueProviderRegistry.resolveReference")(function* (
+      project: OrchestrationProjectShell,
+      reference: {
+        readonly repository: string;
+        readonly provider?: IssueProviderKind | undefined;
+        readonly host?: string | undefined;
+      },
+    ) {
+      for (const adapter of byKind.values()) {
+        if (adapter.resolveReference === undefined) continue;
+        if (reference.provider !== undefined && adapter.kind !== reference.provider) continue;
+        const source = yield* adapter.resolveReference(project, reference.repository.trim());
+        if (source === null) continue;
+        const host = source.host.trim().toLowerCase();
+        if (reference.host !== undefined && host !== reference.host.toLowerCase()) continue;
+        return {
+          project,
+          adapter,
+          repository: source.repository,
+          host,
+          ...(source.credentialId === undefined ? {} : { credentialId: source.credentialId }),
+        } satisfies IssueProjectSource;
+      }
+      return null;
+    }),
   };
 });
 

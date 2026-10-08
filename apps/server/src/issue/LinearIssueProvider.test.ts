@@ -419,3 +419,47 @@ it.effect("carries a Linear issue's ancestors and nested sub-issues on its detai
     ),
   ),
 );
+
+it.effect("resolves a named team to the connected account that can read it", () =>
+  Effect.gen(function* () {
+    let connectionReads = 0;
+    const account = (credentialId: string, keys: ReadonlyArray<string>) => ({
+      credentialId,
+      status: "authenticated" as const,
+      accountName: credentialId,
+      accountEmail: null,
+      projects: keys.map((key) => ({ id: key, key, name: key })),
+    });
+    const adapter = yield* make.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(LinearApi.LinearApi)({
+            connection: Effect.sync(() => {
+              connectionReads += 1;
+              return {
+                status: "authenticated" as const,
+                hasStoredToken: true,
+                accountName: "first",
+                accountEmail: null,
+                projects: [],
+                accounts: [account("first", ["ENG"]), account("second", ["CO"])],
+              };
+            }),
+          }),
+          ServerSettings.layerTest({ issueTracking: { connections: { linear: {} } } } as never),
+        ),
+      ),
+    );
+
+    assert.deepStrictEqual(yield* adapter.resolveReference!(PROJECT, "co"), {
+      host: "linear.app",
+      repository: "CO",
+      credentialId: "second",
+    });
+    yield* adapter.resolveReference!(PROJECT, "CO");
+    assert.strictEqual(connectionReads, 1);
+    assert.isNull(yield* adapter.resolveReference!(PROJECT, "OPS"));
+    assert.isNull(yield* adapter.resolveReference!(PROJECT, "acme/web"));
+    assert.strictEqual(connectionReads, 2);
+  }),
+);

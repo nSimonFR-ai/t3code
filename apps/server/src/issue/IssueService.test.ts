@@ -959,6 +959,53 @@ it.effect("routes each repository on one project through its matching adapter", 
   }),
 );
 
+it.effect("reads a Linear issue from a project with no git host or Linear binding", () =>
+  Effect.gen(function* () {
+    const asked: Array<string | undefined> = [];
+    const linear = fakeProvider("linear", {
+      resolveReference: (_project, repository) =>
+        Effect.succeed(
+          repository === "CO"
+            ? { host: "linear.app", repository: "CO", credentialId: "user-1" }
+            : null,
+        ),
+      getIssue: ({ repository, number, credentialId }) => {
+        asked.push(`${repository}-${number}:${credentialId}`);
+        return Effect.succeed(issueDetail(number, { title: "Linear issue" }));
+      },
+    });
+    const hostless = [project({ id: "p1", title: "TRUSK", workspaceRoot: "/trusk" })];
+    const service = yield* makeService({
+      projects: hostless,
+      providers: [fakeProvider("github"), linear],
+    });
+
+    const detail = yield* service.detail({
+      projectId: "p1" as ProjectId,
+      repository: "CO",
+      number: 130,
+      provider: "linear",
+    });
+    assert.strictEqual(detail.title, "Linear issue");
+    assert.strictEqual(detail.provider, "linear");
+    assert.deepStrictEqual(asked, ["CO-130:user-1"]);
+
+    const unknownTeam = yield* service
+      .detail({ projectId: "p1" as ProjectId, repository: "OPS", number: 1, provider: "linear" })
+      .pipe(Effect.flip);
+    assert.strictEqual(unknownTeam._tag, "IssueOperationError");
+    assert.include(unknownTeam.message, "No connected linear account can read OPS");
+    const github = yield* service.detail({ ...REFERENCE, provider: "github" }).pipe(Effect.flip);
+    assert.strictEqual(github._tag, "IssueUnavailableError");
+
+    // A project on a Git host reads an unbound Linear team the same way, and its own repository
+    // still goes to its own host.
+    const onGitHub = yield* makeService({ projects: ONE_PROJECT, providers: [linear] });
+    yield* onGitHub.detail({ projectId: "p1" as ProjectId, repository: "CO", number: 7 });
+    assert.deepStrictEqual(asked, ["CO-130:user-1", "CO-7:user-1"]);
+  }),
+);
+
 it.effect("keeps a project available when one of its issue sources is unreadable", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

@@ -220,6 +220,17 @@ export interface IssueAdapter {
     project: OrchestrationProjectShell,
   ) => Effect.Effect<IssueAdapterSource | null>;
 
+  /**
+   * A source for a repository a caller names outright, for trackers whose items do not belong to
+   * the project's checkout or binding: a Linear issue can be linked from any project. Null when
+   * this adapter cannot read that repository with any connected account. May spend an API call,
+   * so it is only asked once a reference matched none of the project's own sources.
+   */
+  readonly resolveReference?: (
+    project: OrchestrationProjectShell,
+    repository: string,
+  ) => Effect.Effect<IssueAdapterSource | null>;
+
   /** The signed-in account, which is what involvement filtering compares against. */
   readonly getViewer: (
     input: {
