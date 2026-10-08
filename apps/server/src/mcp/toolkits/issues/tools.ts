@@ -25,9 +25,19 @@ import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 export const IssueTargetInput = Schema.Struct({
-  repository: TrimmedNonEmptyString,
-  number: PositiveInt,
-  provider: Schema.optional(IssueProviderKind),
+  repository: TrimmedNonEmptyString.annotate({
+    description:
+      "Where the issue lives: owner/name (or the host's full project path) for a Git host, or the team key for Linear, the letters before the dash in an identifier such as CO in CO-130.",
+  }),
+  number: PositiveInt.annotate({
+    description: "Issue number; for Linear, the digits after the dash, such as 130 in CO-130.",
+  }),
+  provider: Schema.optional(
+    IssueProviderKind.annotate({
+      description:
+        "Issue tracker. Defaults to the project's own. Pass linear for a Linear issue: it can be read and linked from any project while a connected Linear account can see its team.",
+    }),
+  ),
   url: Schema.optional(TrimmedNonEmptyString),
 });
 
@@ -62,7 +72,7 @@ const dependencies = [
 
 const ReadIssueTool = Tool.make("read_issue", {
   description:
-    "Read an issue body and bounded pages of comments, history, and linked pull requests as Markdown. Linked issues use their saved project and host; references without a URL use this thread's project. Pass repository, number, and provider when needed. Pass a full issue URL to read another repository with existing server credentials, or choose between linked issues on different hosts. Pass nextCommentsCursor as commentsCursor, nextEventsCursor as eventsCursor, or nextLinkedPullRequestsCursor as linkedPullRequestsCursor to read that next page. Pass at most one cursor per call. Continuations return only the requested section. A section's truncated=true with a null cursor means this host cannot return the rest through T3.",
+    "Read an issue body and bounded pages of comments, history, and linked pull requests as Markdown. Linked issues use their saved project and host; references without a URL use this thread's project. Pass repository, number, and provider when needed; a Linear issue CO-130 is repository CO, number 130, provider linear, and can be read from any project while a connected Linear account sees its team. Pass a full issue URL to read another repository with existing server credentials, or choose between linked issues on different hosts. Pass nextCommentsCursor as commentsCursor, nextEventsCursor as eventsCursor, or nextLinkedPullRequestsCursor as linkedPullRequestsCursor to read that next page. Pass at most one cursor per call. Continuations return only the requested section. A section's truncated=true with a null cursor means this host cannot return the rest through T3.",
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
     commentsCursor: Schema.optional(TrimmedNonEmptyString),
@@ -91,7 +101,7 @@ const ReadIssueTool = Tool.make("read_issue", {
 
 const LinkIssueTool = Tool.make("link_issue", {
   description:
-    "Link an issue to this thread. References without a URL use this thread's project. Pass a full issue URL to link another repository with existing server credentials. The link appears with the thread and its pull requests. Linking the same issue again succeeds with alreadyLinked=true.",
+    "Link an issue to this thread. References without a URL use this thread's project, except a Linear issue: pass its team key as repository (CO for CO-130), its number, and provider linear, and it links from any project while a connected Linear account sees its team. Use after taking work on an issue. Pass a full issue URL to link another repository with existing server credentials. The link appears with the thread and its pull requests. Linking the same issue again succeeds with alreadyLinked=true.",
   parameters: IssueTargetInput,
   success: Schema.Struct({ issue: ThreadIssueLink, alreadyLinked: Schema.Boolean }),
   failure: IssueToolError,

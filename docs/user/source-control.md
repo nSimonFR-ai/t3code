@@ -278,7 +278,9 @@ and their marks follow the same rules as on web and desktop.
 
 Open **Settings → Integrations → Issue Tracking**, then select **Add account** under **Linear
 accounts**. Enter a Linear API key, then choose an account and team for each project. You can add
-several accounts. Keys stay on the connected server.
+several accounts. Keys stay on the connected server. Choosing a team puts its issues in the
+project's issue list; a thread can link any Linear issue a connected account can see, even in a
+project with no team chosen or no Git remote.
 
 Linear supports browsing, search, comments, reactions, and agent handoffs. Create issues and change
 their title, description, state, labels, or assignees in Linear. Disconnecting a saved account removes
