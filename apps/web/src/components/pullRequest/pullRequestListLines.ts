@@ -1,4 +1,4 @@
-import type { ThreadPullRequestLink } from "@t3tools/contracts";
+import type { IssueLinkedPullRequest, ThreadPullRequestLink } from "@t3tools/contracts";
 import type { ThreadPullRequestChain } from "@t3tools/shared/threadPullRequests";
 
 /** One line of a thread's pull-request list: a link plus how deep it sits in its stack. */
@@ -46,4 +46,37 @@ export function pullRequestListLines(
           : null,
     }));
   });
+}
+
+export function pullRequestLineKey(
+  link: Pick<ThreadPullRequestLink, "host" | "repository" | "number">,
+): string {
+  return `${link.host.toLowerCase()}/${link.repository.toLowerCase()}#${link.number}`;
+}
+
+/** The line key of a pull request an issue tracker reports, or null for an unreadable URL. */
+export function trackerPullRequestLineKey(link: IssueLinkedPullRequest): string | null {
+  const url = URL.parse(link.url);
+  return url === null ? null : pullRequestLineKey({ host: url.host, ...link });
+}
+
+/**
+ * The lines a linked issue's tree can show in its place: pull requests outside any stack that the
+ * tracker also reports. A stacked layer stays in the list, where its chain reads as one piece.
+ */
+export function issueNestedPullRequestLines(
+  lines: ReadonlyArray<PullRequestListLine>,
+  trackerLinks: ReadonlyArray<IssueLinkedPullRequest>,
+): ReadonlyMap<string, PullRequestListLine> {
+  const chainSizes = new Map<string, number>();
+  for (const line of lines) {
+    chainSizes.set(line.chainKey, (chainSizes.get(line.chainKey) ?? 0) + 1);
+  }
+  const reported = new Set(trackerLinks.map(trackerPullRequestLineKey));
+  return new Map(
+    lines
+      .filter((line) => chainSizes.get(line.chainKey) === 1)
+      .map((line) => [pullRequestLineKey(line.link), line] as const)
+      .filter(([key]) => reported.has(key)),
+  );
 }

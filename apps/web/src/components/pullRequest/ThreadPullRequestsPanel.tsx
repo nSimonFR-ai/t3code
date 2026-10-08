@@ -49,7 +49,13 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { openLinkPullRequestDialog } from "./LinkPullRequestDialog";
 import { ThreadIssueTrees } from "../issue/ThreadIssueTrees";
-import { pullRequestListLines, type PullRequestListLine } from "./pullRequestListLines";
+import {
+  issueNestedPullRequestLines,
+  pullRequestLineKey,
+  pullRequestListLines,
+  trackerPullRequestLineKey,
+  type PullRequestListLine,
+} from "./pullRequestListLines";
 import {
   PULL_REQUEST_ROW_CLASS,
   PULL_REQUEST_ROW_NUMBER_CLASS,
@@ -498,6 +504,16 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     [supportsPullRequests, thread],
   );
   const lines = useMemo(() => pullRequestListLines(resolveThreadPullRequestChains(links)), [links]);
+  // A pull request a linked issue also lists is drawn once, under that issue.
+  const [trackerLinks, setTrackerLinks] = useState<ReadonlyArray<IssueLinkedPullRequest>>([]);
+  const nestedLines = useMemo(
+    () => issueNestedPullRequestLines(lines, trackerLinks),
+    [lines, trackerLinks],
+  );
+  const topLines = useMemo(
+    () => lines.filter((line) => !nestedLines.has(pullRequestLineKey(line.link))),
+    [lines, nestedLines],
+  );
   const issues = useMemo(() => thread?.issues ?? [], [thread]);
   // The project an issue is read through, by its saved project, its host URL, or — for a
   // tracker with no repository of its own — the thread's project.
@@ -614,6 +630,31 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     return latest;
   }, [links]);
 
+  const renderLine = (line: PullRequestListLine) => (
+    <LinkRow
+      key={`${line.link.host}/${line.link.repository}#${line.link.number}`}
+      line={line}
+      threadRef={threadRef}
+      projectId={
+        capabilities?.pullRequests === true
+          ? (findProjectForChangeRequest(environmentProjects, line.link)?.id ??
+            thread?.projectId ??
+            null)
+          : null
+      }
+      speedMode={speedMode}
+      onUnlink={handleUnlink}
+      onSetWatching={supportsWatch ? handleSetWatching : null}
+    />
+  );
+  const renderTreePullRequest = (link: IssueLinkedPullRequest, depth: number) => {
+    const key = trackerPullRequestLineKey(link);
+    const line = key === null ? undefined : nestedLines.get(key);
+    if (line === undefined) return null;
+    // Stepped in like the tracker's own row, at the issue tree's one-rem indent.
+    return <div style={{ paddingLeft: `${depth}rem` }}>{renderLine(line)}</div>;
+  };
+
   if (links.length === 0 && issues.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
@@ -635,26 +676,10 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     <div className="flex h-full min-h-0 flex-col">
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col p-1.5">
-          {lines.map((line) => (
-            <LinkRow
-              key={`${line.link.host}/${line.link.repository}#${line.link.number}`}
-              line={line}
-              threadRef={threadRef}
-              projectId={
-                capabilities?.pullRequests === true
-                  ? (findProjectForChangeRequest(environmentProjects, line.link)?.id ??
-                    thread?.projectId ??
-                    null)
-                  : null
-              }
-              speedMode={speedMode}
-              onUnlink={handleUnlink}
-              onSetWatching={supportsWatch ? handleSetWatching : null}
-            />
-          ))}
+          {topLines.map((line) => renderLine(line))}
           {issues.length > 0 ? (
             <ThreadIssueTrees
-              className={lines.length > 0 ? "mt-1.5" : undefined}
+              className={topLines.length > 0 ? "mt-1.5" : undefined}
               environmentId={threadRef.environmentId}
               threadRef={threadRef}
               linked={issues}
@@ -667,6 +692,8 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
               renderActions={(issue) => (
                 <IssueTreeActions issue={issue} onUnlink={handleUnlinkIssue} />
               )}
+              renderPullRequest={renderTreePullRequest}
+              onTreePullRequests={setTrackerLinks}
             />
           ) : null}
         </div>
