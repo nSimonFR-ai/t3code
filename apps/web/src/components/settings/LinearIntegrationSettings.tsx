@@ -24,6 +24,7 @@ import {
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -160,21 +161,36 @@ export function LinearIntegrationSettings() {
                   key={account.credentialId}
                   className="flex items-center gap-3 rounded-lg border border-border/60 px-3 py-2"
                 >
-                  <div className="flex min-w-0 flex-1 items-center gap-2">
-                    <span className="truncate text-sm font-medium">{account.accountName}</span>
-                    <RedactedSensitiveText
-                      value={account.accountEmail}
-                      ariaLabel="Toggle Linear account email visibility"
-                      revealTooltip="Click to reveal email"
-                      hideTooltip="Click to hide email"
-                      className="max-w-full truncate"
-                    />
-                    {account.status !== "authenticated" ? (
-                      <span className="truncate text-xs text-destructive">Needs attention</span>
+                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-sm font-medium">{account.accountName}</span>
+                      <RedactedSensitiveText
+                        value={account.accountEmail}
+                        ariaLabel="Toggle Linear account email visibility"
+                        revealTooltip="Click to reveal email"
+                        hideTooltip="Click to hide email"
+                        className="max-w-full truncate"
+                      />
+                      {account.status !== "authenticated" ? (
+                        <span className="shrink-0 text-xs text-destructive">Needs attention</span>
+                      ) : null}
+                    </div>
+                    {account.projects.length > 0 ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <span className="truncate text-xs text-muted-foreground">
+                              {account.projects
+                                .map((team) => `${team.name} (${team.key})`)
+                                .join(", ")}
+                            </span>
+                          }
+                        />
+                        <TooltipPopup side="top">
+                          {account.projects.map((team) => `${team.name} (${team.key})`).join(", ")}
+                        </TooltipPopup>
+                      </Tooltip>
                     ) : null}
-                    <span className="truncate text-xs text-muted-foreground">
-                      {account.projects.map((team) => `${team.name} (${team.key})`).join(", ")}
-                    </span>
                   </div>
                   <Button
                     size="xs"
