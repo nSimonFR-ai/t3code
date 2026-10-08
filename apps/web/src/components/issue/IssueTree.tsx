@@ -7,6 +7,8 @@ import {
   normalizeWorkItemLinkKey,
 } from "@t3tools/contracts";
 
+import { Fragment, type ReactNode } from "react";
+
 import { cn } from "~/lib/utils";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
 import { IssueStateGlyph } from "./issuePresentation";
@@ -223,12 +225,17 @@ export function IssueTreePullRequestRows({
   links,
   depth,
   onOpen,
+  renderPullRequest,
 }: {
   links: ReadonlyArray<IssueLinkedPullRequest> | undefined;
   depth: number;
   onOpen: (link: IssueLinkedPullRequest) => void;
+  /** A fuller row for a pull request the caller already knows, such as one linked to the thread. */
+  renderPullRequest?: ((link: IssueLinkedPullRequest, depth: number) => ReactNode) | undefined;
 }) {
   return (links ?? []).map((link) => {
+    const custom = renderPullRequest?.(link, depth + 1);
+    if (custom != null) return <Fragment key={link.url}>{custom}</Fragment>;
     const presentation = resolvePullRequestState({ state: link.state, isDraft: link.isDraft });
     return (
       <button
