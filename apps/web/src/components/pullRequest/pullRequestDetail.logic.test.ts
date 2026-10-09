@@ -15,6 +15,8 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 import { formatInlineContextReference } from "~/lib/composerContextReferences";
 import { buildMessageContext, reviewCommentContextReference } from "~/lib/composerContextRecords";
+import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
+import { writeHandoffToComposer } from "../sourceControl/handoff";
 
 import {
   buildAddSelectionToAgentHandoff,
@@ -31,7 +33,6 @@ import {
   groupPullRequestTimelineConversations,
   handoffPrompt,
   handoffReviewComments,
-  stripPullRequestHandoffReferences,
   isPullRequestVerdictStale,
   isStackedPullRequestBase,
   loadingPullRequestCheckoutCommand,
@@ -1306,6 +1307,27 @@ describe("a second ask into the same composer", () => {
     diff: "",
   });
 
+  it("keeps one repeated handoff reference and preserves a user reference", () => {
+    const target = DraftId.make("repeated-handoff-reference");
+    const own = chip("file-comment:repeated-handoff");
+    const repeated = chip("pull-request-context:repeated-handoff");
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(target, "Keep my draft.");
+    store.setReviewComments(target, [own]);
+    writeHandoffToComposer(target, { prompt: "First task.", reviewComments: [repeated] });
+    writeHandoffToComposer(target, { prompt: "Second task.", reviewComments: [repeated] });
+
+    const draft = store.getComposerDraft(target)!;
+    expect(draft.prompt).toContain("Keep my draft.");
+    expect(draft.prompt).toContain("Second task.");
+    expect(draft.prompt).not.toContain("First task.");
+    for (const comment of [own, repeated]) {
+      const reference = formatInlineContextReference(reviewCommentContextReference(comment));
+      expect(draft.prompt.split(reference)).toHaveLength(2);
+    }
+    expect(draft.reviewComments?.map(({ id }) => id)).toEqual([own.id, repeated.id]);
+  });
+
   it("replaces what the last one left, chips included", () => {
     const next = handoffReviewComments(
       [chip("pull-request-context:41"), chip("pull-request-selection:page.tsx:1:2")],
@@ -1324,9 +1346,7 @@ describe("a second ask into the same composer", () => {
       state: "open" as const,
       isDraft: false,
     });
-    const prompt = `Look at this. ${formatInlineContextReference(reviewCommentContextReference(own))} `;
 
-    expect(stripPullRequestHandoffReferences(prompt, [own])).toBe(prompt);
     expect(
       handoffReviewComments([own], [chip("pull-request-context:42")]).map((comment) => comment.id),
     ).toEqual([own.id, "pull-request-context:42"]);
@@ -1335,24 +1355,6 @@ describe("a second ask into the same composer", () => {
   it("empties what the last ask left, so the two are never sent as one question", () => {
     const handed = "Explain this pull request.";
     expect(handoffPrompt({ prompt: handed, lastHandoffPrompt: handed }, "")).toBe("");
-  });
-
-  it("removes the previous handoff chip before replacing its prompt", () => {
-    const previous = chip("pull-request-context:42");
-    const prompt = `Explain this pull request. ${formatInlineContextReference(
-      reviewCommentContextReference(previous),
-    )} `;
-    expect(stripPullRequestHandoffReferences(prompt, [previous])).toBe(
-      "Explain this pull request.",
-    );
-  });
-
-  it("keeps a handoff reference when the next action deliberately repeats it", () => {
-    const previous = chip("pull-request-context:42");
-    const prompt = formatInlineContextReference(reviewCommentContextReference(previous));
-    expect(stripPullRequestHandoffReferences(prompt, [previous], new Set([previous.id]))).toBe(
-      prompt,
-    );
   });
 
   it("replaces the last ask's prompt with this one's", () => {

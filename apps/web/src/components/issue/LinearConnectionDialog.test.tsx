@@ -7,6 +7,8 @@ import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import { visitElements } from "../../test/reactElementTree";
 
 const connect = vi.hoisted(() => vi.fn());
+const permission = vi.hoisted(() => ({ allowed: true }));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => permission.allowed }));
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   const { reactHookHarness } = await import("../../test/reactHookHarness");
@@ -26,6 +28,7 @@ describe("Linear account dialog", () => {
   beforeEach(() => {
     hooks.reset();
     vi.clearAllMocks();
+    permission.allowed = true;
   });
   it("shows a failed connection inside the dialog", async () => {
     connect.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("Invalid Linear API key"))));
@@ -113,5 +116,54 @@ describe("Linear account dialog", () => {
     hooks.beginRender();
     dialog = LinearConnectionDialog(props);
     expect(visitElements(dialog, (element) => element.type === Input)?.props.value).toBe("");
+  });
+
+  it("keeps the API key but blocks adding the account while connect access is revoked", async () => {
+    connect.mockResolvedValue(AsyncResult.success(undefined));
+    const props = {
+      open: true,
+      environmentId: "primary" as EnvironmentId,
+      onOpenChange: vi.fn(),
+      onConnected: vi.fn(),
+    };
+    const render = () => {
+      hooks.beginRender();
+      return LinearConnectionDialog(props);
+    };
+    const submitButton = (dialog: ReturnType<typeof LinearConnectionDialog>) =>
+      visitElements(
+        dialog,
+        (element) => element.type === Button && element.props.type === "submit",
+      );
+    const submit = (dialog: ReturnType<typeof LinearConnectionDialog>) =>
+      (
+        visitElements(dialog, (element) => element.type === "form")!.props.onSubmit as (event: {
+          preventDefault: () => void;
+        }) => Promise<void>
+      )({ preventDefault: vi.fn() });
+
+    const input = visitElements(render(), (element) => element.type === Input);
+    (input!.props.onChange as (event: { currentTarget: { value: string } }) => void)({
+      currentTarget: { value: "lin_api_key" },
+    });
+
+    permission.allowed = false;
+    let dialog = render();
+    expect(submitButton(dialog)?.props.disabled).toBe(true);
+    await submit(dialog);
+    expect(connect).not.toHaveBeenCalled();
+    dialog = render();
+    expect(visitElements(dialog, (element) => element.type === Input)?.props.value).toBe(
+      "lin_api_key",
+    );
+
+    permission.allowed = true;
+    dialog = render();
+    expect(submitButton(dialog)?.props.disabled).toBe(false);
+    await submit(dialog);
+    expect(connect).toHaveBeenCalledWith({
+      environmentId: "primary",
+      input: { provider: "linear", token: "lin_api_key" },
+    });
   });
 });

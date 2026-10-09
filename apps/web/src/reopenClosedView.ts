@@ -1,10 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import type {
-  EnvironmentId,
-  ProjectId,
+import {
   IssueInvolvement,
-  PullRequestInvolvement,
+  IssueListSort,
+  IssueListState,
+  type EnvironmentId,
+  type ProjectId,
+  type PullRequestInvolvement,
 } from "@t3tools/contracts";
 
 import type { OpenPreviewMutation } from "./browser/openFileInPreview";
@@ -22,6 +24,9 @@ import {
 } from "./rightPanelStore";
 
 const isPullRequestListSort = Schema.is(PullRequestListSort);
+const isIssueInvolvement = Schema.is(IssueInvolvement);
+const isIssueListState = Schema.is(IssueListState);
+const isIssueListSort = Schema.is(IssueListSort);
 
 export interface ReopenOwnerState {
   /** False when the entry's environment is not in the catalog. */
@@ -114,6 +119,44 @@ export function pullRequestsSearchForRestore<S extends PullRequestsSearchLike>(
         }
       : {}),
   } as S & PullRequestListPreferences;
+}
+
+type IssuesSearchLike = {
+  involvement?: string | undefined;
+  state?: string | undefined;
+  sort?: string | undefined;
+  repository?: string;
+  number?: number;
+  selectedProjectId?: ProjectId;
+  selectedProvider?: string;
+};
+
+export function issuesSearchForRestore<S extends IssuesSearchLike>(
+  previous: S,
+  selected: RightPanelSurface | null,
+): S & { involvement: IssueInvolvement; state: IssueListState; sort?: IssueListSort } {
+  const {
+    repository: _repository,
+    number: _number,
+    selectedProjectId: _projectId,
+    selectedProvider: _provider,
+    sort,
+    ...filters
+  } = previous;
+  return {
+    ...filters,
+    involvement: isIssueInvolvement(previous.involvement) ? previous.involvement : "all",
+    state: isIssueListState(previous.state) ? previous.state : "open",
+    ...(isIssueListSort(sort) ? { sort } : {}),
+    ...(selected?.kind === "issue"
+      ? {
+          repository: selected.repository,
+          number: selected.number,
+          selectedProjectId: selected.projectId as ProjectId,
+          ...(selected.provider === undefined ? {} : { selectedProvider: selected.provider }),
+        }
+      : {}),
+  } as S & { involvement: IssueInvolvement; state: IssueListState; sort?: IssueListSort };
 }
 
 export async function reopenClosedView(

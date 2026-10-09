@@ -139,7 +139,7 @@ export const disconnectLinearAccount = (input: { readonly credentialId: string }
               ),
         ),
       );
-    }),
+    }).pipe(Effect.uninterruptible),
   );
 
 export const make = Effect.gen(function* () {

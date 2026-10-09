@@ -55,7 +55,7 @@ it("reads pull requests from Linear's GitHub and GitLab attachments", () => {
         url: "https://github.com/acme/web/pull/102",
         state: "open",
         isDraft: false,
-        closesIssue: true,
+        closesIssue: false,
       },
       {
         repository: "acme/group/api",
@@ -64,7 +64,7 @@ it("reads pull requests from Linear's GitHub and GitLab attachments", () => {
         url: "https://gitlab.com/acme/group/api/-/merge_requests/7",
         state: "merged",
         isDraft: false,
-        closesIssue: true,
+        closesIssue: false,
       },
       {
         repository: "acme/web",
@@ -73,9 +73,86 @@ it("reads pull requests from Linear's GitHub and GitLab attachments", () => {
         url: "https://github.com/acme/web/pull/9",
         state: "open",
         isDraft: true,
-        closesIssue: true,
+        closesIssue: false,
       },
     ],
+  );
+});
+
+it("keeps reference-only Linear pull request attachments non-closing", () => {
+  const links = linearLinkedPullRequests([
+    {
+      url: "https://github.com/acme/web/pull/12",
+      title: "Refs ENG-63",
+      sourceType: "github",
+      metadata: { status: "merged", number: 12 },
+    },
+    {
+      url: "https://github.com/acme/web/pull/13",
+      title: "Related to ENG-63",
+      sourceType: "github",
+    },
+  ]);
+  assert.deepStrictEqual(
+    links.map((link) => [link.number, link.closesIssue]),
+    [
+      [12, false],
+      [13, false],
+    ],
+  );
+});
+
+it("deduplicates Linear attachments by PR identity and retains link order and status", () => {
+  const links = linearLinkedPullRequests([
+    {
+      url: "https://github.com/Acme/Web/pull/7#issuecomment-9",
+      title: "First",
+      metadata: { status: "merged" },
+    },
+    { url: "https://github.com/acme/web/pull/8", title: "Second" },
+    {
+      url: "https://github.com/acme/web/pull/7?utm_source=linear",
+      title: "Duplicate",
+      metadata: { status: "closed" },
+    },
+    { url: "https://github.com/acme/web/pull/7", title: "Duplicate" },
+    {
+      url: "https://gitlab.com/acme/web/-/merge_requests/7",
+      title: "GitLab",
+      metadata: { status: "draft" },
+    },
+    { url: "https://github.com/acme/api/pull/7", title: "Other repository" },
+    {
+      url: "https://gitlab.com/acme/web/-/merge_requests/7#note_1",
+      title: "Duplicate",
+      metadata: { status: "merged" },
+    },
+  ]);
+
+  assert.deepStrictEqual(
+    links.map((link) => [link.title, link.url, link.state, link.isDraft]),
+    [
+      ["First", "https://github.com/Acme/Web/pull/7#issuecomment-9", "merged", false],
+      ["Second", "https://github.com/acme/web/pull/8", "open", false],
+      ["GitLab", "https://gitlab.com/acme/web/-/merge_requests/7", "open", true],
+      ["Other repository", "https://github.com/acme/api/pull/7", "open", false],
+    ],
+  );
+});
+
+it("ignores invalid Linear PR attachment paths and numbers", () => {
+  assert.deepStrictEqual(
+    linearLinkedPullRequests(
+      [
+        "https://github.com/acme/web/pull/7abc",
+        "https://github.com/acme/web/pull/7/not-a-pr",
+        "https://gitlab.com/acme/web/-/merge_requests/7abc",
+        "https://gitlab.com/acme/web/-/merge_requests/7/not-a-pr",
+        "https://github.com/acme/web/pull/0",
+        "https://github.com/acme/web/pull/9007199254740993",
+      ].map((url) => ({ url, title: "Invalid" })),
+    ),
+    [],
   );
 });
 
@@ -323,8 +400,19 @@ it.effect("does not resolve a cleared project binding", () =>
   ),
 );
 
-it.effect("carries a Linear issue's ancestors and nested sub-issues on its detail", () =>
-  Effect.gen(function* () {
+it.effect("carries mixed-team ancestors and same-number sub-issues on a Linear detail", () => {
+  const attachments = {
+    nodes: [
+      {
+        url: "https://github.com/acme/web/pull/31",
+        title: "Done part",
+        sourceType: "github",
+        metadata: { status: "merged" },
+      },
+      { url: "https://github.com/acme/web/pull/31#issuecomment-9", title: "Duplicate" },
+    ],
+  };
+  return Effect.gen(function* () {
     const adapter = yield* make;
     const detail = yield* adapter.getIssue({
       cwd: PROJECT.workspaceRoot,
@@ -333,21 +421,42 @@ it.effect("carries a Linear issue's ancestors and nested sub-issues on its detai
       number: 2,
     });
     assert.deepStrictEqual(
-      detail.ancestors?.map((issue) => issue.number),
-      [0, 1],
+      detail.ancestors?.map((issue) => [issue.repository, issue.number]),
+      [
+        ["OPS", 0],
+        ["ENG", 1],
+      ],
     );
     assert.deepStrictEqual(
-      detail.subIssues?.map((issue) => [issue.number, issue.state, issue.subIssues.length]),
+      detail.subIssues?.map((issue) => [
+        issue.repository,
+        issue.number,
+        issue.state,
+        issue.subIssues.length,
+      ]),
       [
-        [3, "closed", 1],
-        [4, "open", 0],
+        ["ENG", 3, "closed", 1],
+        ["OPS", 3, "open", 0],
       ],
     );
     assert.strictEqual(detail.subIssues?.[0]?.subIssues[0]?.number, 5);
+    assert.strictEqual(detail.subIssues?.[0]?.subIssues[0]?.repository, "OPS");
+    assert.strictEqual(detail.subIssues?.[1]?.url, "https://linear.app/acme/issue/OPS-3");
     assert.deepStrictEqual(
       detail.subIssues?.[0]?.linkedPullRequests?.map((link) => [link.number, link.state]),
       [[31, "merged"]],
     );
+    for (const links of [
+      detail.linkedPullRequests,
+      detail.ancestors?.[0]?.linkedPullRequests,
+      detail.ancestors?.[1]?.linkedPullRequests,
+      detail.subIssues?.[0]?.subIssues[0]?.linkedPullRequests,
+    ]) {
+      assert.deepStrictEqual(
+        links?.map((link) => [link.number, link.state]),
+        [[31, "merged"]],
+      );
+    }
     assert.strictEqual(detail.subIssues?.[1]?.linkedPullRequests, undefined);
   }).pipe(
     Effect.provide(
@@ -364,50 +473,50 @@ it.effect("carries a Linear issue's ancestors and nested sub-issues on its detai
               createdAt: "2026-08-17T00:00:00.000Z",
               updatedAt: "2026-08-17T00:00:00.000Z",
               state: { name: "Todo", type: "unstarted" },
+              attachments,
               parent: {
                 number: 1,
+                team: { key: "ENG" },
                 title: "Epic",
                 url: "https://linear.app/acme/issue/ENG-1",
                 state: { name: "In Progress", type: "started" },
+                attachments,
                 parent: {
                   number: 0,
+                  team: { key: "OPS" },
                   title: "Initiative",
-                  url: "https://linear.app/acme/issue/ENG-0",
+                  url: "https://linear.app/acme/issue/OPS-0",
                   state: { name: "In Progress", type: "started" },
+                  attachments,
                 },
               },
               children: {
                 nodes: [
                   {
                     number: 3,
+                    team: { key: "ENG" },
                     title: "Done part",
                     url: "https://linear.app/acme/issue/ENG-3",
                     state: { name: "Done", type: "completed" },
-                    attachments: {
-                      nodes: [
-                        {
-                          url: "https://github.com/acme/web/pull/31",
-                          title: "Done part",
-                          sourceType: "github",
-                          metadata: { status: "merged" },
-                        },
-                      ],
-                    },
+                    attachments,
                     children: {
                       nodes: [
                         {
                           number: 5,
+                          team: { key: "OPS" },
                           title: "Leaf",
-                          url: "https://linear.app/acme/issue/ENG-5",
+                          url: "https://linear.app/acme/issue/OPS-5",
                           state: { name: "Todo", type: "unstarted" },
+                          attachments,
                         },
                       ],
                     },
                   },
                   {
-                    number: 4,
+                    number: 3,
+                    team: { key: "OPS" },
                     title: "Open part",
-                    url: "https://linear.app/acme/issue/ENG-4",
+                    url: "https://linear.app/acme/issue/OPS-3",
                     state: { name: "Todo", type: "unstarted" },
                   },
                 ],
@@ -417,8 +526,8 @@ it.effect("carries a Linear issue's ancestors and nested sub-issues on its detai
         ServerSettings.layerTest({ issueTracking: { connections: { linear: {} } } } as never),
       ),
     ),
-  ),
-);
+  );
+});
 
 it.effect("resolves a named team to the connected account that can read it", () =>
   Effect.gen(function* () {

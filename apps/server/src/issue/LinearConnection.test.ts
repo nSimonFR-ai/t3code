@@ -521,6 +521,113 @@ it.effect("restores project bindings when credential deletion fails", () => {
   );
 });
 
+it.effect.each([
+  { name: "successful deletion", deletionFails: false, patch: {}, expectedBinding: null },
+  {
+    name: "failed deletion",
+    deletionFails: true,
+    patch: {},
+    expectedBinding: { credentialId: "user-1", repository: "ENG" },
+  },
+  {
+    name: "unrelated settings edit",
+    deletionFails: true,
+    patch: { theme: "dark" as const },
+    expectedBinding: { credentialId: "user-1", repository: "ENG" },
+  },
+  {
+    name: "newer binding",
+    deletionFails: true,
+    patch: {
+      issueTracking: {
+        connections: {
+          linear: {
+            projectBindings: { [PROJECT_ID]: { credentialId: "user-2", repository: "API" } },
+          },
+        },
+      },
+    },
+    expectedBinding: { credentialId: "user-2", repository: "API" },
+  },
+  {
+    name: "newer explicit unbind",
+    deletionFails: true,
+    patch: {
+      issueTracking: { connections: { linear: { projectBindings: { [PROJECT_ID]: null } } } },
+    },
+    expectedBinding: null,
+  },
+])(
+  "finishes an accepted disconnect after cancellation: $name",
+  ({ deletionFails, patch, expectedBinding }) =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let keyStored = true;
+      let deletionFinished = false;
+      const api = Layer.mock(LinearApi.LinearApi)({
+        disconnect: () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            yield* Deferred.await(release);
+            deletionFinished = true;
+            if (deletionFails) {
+              return yield* new LinearApi.LinearApiError({
+                operation: "disconnect",
+                reason: "failed",
+              });
+            }
+            keyStored = false;
+            return connection();
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const disconnect = yield* disconnectLinearAccount({ credentialId: "user-1" }).pipe(
+          Effect.forkChild,
+        );
+        yield* Deferred.await(started);
+        assert.isNull(
+          (yield* settings.getSettings).issueTracking.connections.linear?.projectBindings[
+            PROJECT_ID
+          ],
+        );
+        yield* settings.updateSettings(patch);
+        const interruption = yield* Fiber.interrupt(disconnect).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(interruption);
+
+        assert.isTrue(deletionFinished);
+        assert.strictEqual(keyStored, deletionFails);
+        assert.deepStrictEqual(
+          (yield* settings.getSettings).issueTracking.connections.linear?.projectBindings[
+            PROJECT_ID
+          ],
+          expectedBinding,
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            api,
+            ServerSettings.layerTest({
+              issueTracking: {
+                connections: {
+                  linear: {
+                    projectBindings: {
+                      [PROJECT_ID]: { credentialId: "user-1", repository: "ENG" },
+                    },
+                  },
+                },
+              },
+            }),
+          ),
+        ),
+      );
+    }),
+);
+
 it.effect.each([{ credentialId: "user-2", repository: "API" }, null])(
   "keeps a newer direct settings edit when credential deletion fails: %s",
   (newBinding) =>

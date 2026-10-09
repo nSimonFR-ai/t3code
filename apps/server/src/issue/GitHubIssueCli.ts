@@ -1,4 +1,6 @@
 import * as Context from "effect/Context";
+import * as Cache from "effect/Cache";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
@@ -60,6 +62,7 @@ import {
   ISSUE_SEARCH_MAX_RESULTS,
   ISSUE_SEARCH_MAX_ROWS,
   ISSUE_SUPPLEMENT_GRAPHQL_QUERY,
+  ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY,
   ISSUE_TEMPLATES_GRAPHQL_QUERY,
   ISSUE_TEMPLATE_FORMS_GRAPHQL_QUERY,
   ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
@@ -190,6 +193,7 @@ export interface GitHubIssueListBatch {
 export interface GitHubIssueSearchBatch {
   readonly items: ReadonlyArray<GitHubIssueSearchItem>;
   readonly truncated: boolean;
+  readonly ceilingReached: boolean;
 }
 
 export interface GitHubIssueActivity {
@@ -572,6 +576,11 @@ function instantRunsOn(
 
 const make = Effect.gen(function* () {
   const api = yield* GitHubApi.GitHubApi;
+  const unsupportedHierarchy = yield* Cache.make({
+    lookup: (host: string) => Effect.succeed(host),
+    capacity: 64,
+    timeToLive: Duration.minutes(10),
+  });
 
   const readError =
     (input: { readonly cwd: string; readonly operation: string }) => (cause: unknown) =>
@@ -586,6 +595,7 @@ const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly host: string;
     readonly operation: string;
+    readonly minimumCost?: number;
     readonly variables?: Readonly<Record<string, unknown>>;
     readonly query: string;
     readonly decode: (raw: string) => Result.Result<A, unknown>;
@@ -670,16 +680,39 @@ const make = Effect.gen(function* () {
       .pipe(Effect.asVoid);
   };
 
-  const issueDetail: GitHubIssueCli["Service"]["getIssueDetail"] = (input) => {
-    const { owner, name } = parseRepositorySelector(input.repository);
-    return graphqlRead({
-      ...input,
-      operation: "getIssueDetail",
-      variables: { owner, name, number: input.number },
-      query: ISSUE_SUPPLEMENT_GRAPHQL_QUERY,
-      decode: decodeIssueCoreJson,
+  const issueDetail: GitHubIssueCli["Service"]["getIssueDetail"] = (input) =>
+    Effect.gen(function* () {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      const host = input.host.trim().toLowerCase();
+      const read = (query: string) =>
+        graphqlRead({
+          ...input,
+          operation: "getIssueDetail",
+          variables: { owner, name, number: input.number },
+          query,
+          minimumCost: query === ISSUE_SUPPLEMENT_GRAPHQL_QUERY ? 3 : 1,
+          decode: decodeIssueCoreJson,
+        });
+      if (yield* Cache.has(unsupportedHierarchy, host))
+        return yield* read(ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY);
+      return yield* read(ISSUE_SUPPLEMENT_GRAPHQL_QUERY).pipe(
+        Effect.catchTags({
+          GitHubApiResponseError: (error) =>
+            error.status === 200 &&
+            error.githubErrors !== undefined &&
+            error.githubErrors.length > 0 &&
+            error.githubErrors.every((message) =>
+              /^Field [\x27"](?:parent|subIssues)[\x27"] (?:doesn\x27t|does not) exist on type [\x27"]Issue[\x27"]$/.test(
+                message,
+              ),
+            )
+              ? Cache.set(unsupportedHierarchy, host, host).pipe(
+                  Effect.andThen(read(ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY)),
+                )
+              : Effect.fail(error),
+        }),
+      );
     });
-  };
 
   const summaryResolver = RequestResolver.makeGrouped<IssueSummaryRead, string>({
     key: ({ request, context }) =>
@@ -753,6 +786,18 @@ const make = Effect.gen(function* () {
     // per-repository read does — up to GitHub's own ceiling on a search page, past which
     // `hasNextPage` is what says there is more.
     const rows = Math.min(input.limit + 1, ISSUE_SEARCH_MAX_ROWS);
+    const seenAt = new Map(
+      input.repositories.map((repository) => {
+        const key = repository.trim().toLowerCase();
+        return [
+          key,
+          new Set(
+            input.cursor?.seenAtByRepository?.[key] ??
+              (input.repositories.length === 1 ? input.cursor?.seenAt : undefined),
+          ),
+        ] as const;
+      }),
+    );
     const searchPage = (
       cursor: string | null,
       first: number,
@@ -770,28 +815,35 @@ const make = Effect.gen(function* () {
     return Effect.gen(function* () {
       const items: Array<GitHubIssueSearchItem> = [];
       let read = 0;
+      let skipped = 0;
       let cursor: string | null = null;
       let hasNextPage = false;
       let handed = 0;
       do {
-        // The pages after the first are only there to finish an instant, so they are asked for
-        // as wide as GitHub allows rather than as narrow as the page.
         const batch: GitHubSearchPage = yield* searchPage(
           cursor,
           read === 0 ? rows : Math.min(ISSUE_SEARCH_MAX_RESULTS - read, ISSUE_SEARCH_MAX_ROWS),
         );
-        items.push(...batch.items);
+        const unseen = batch.items.filter(
+          (item) =>
+            !supportsIssueCursor(input) ||
+            item.updatedAt !== input.cursor?.updatedBefore ||
+            !seenAt.get(item.repository.toLowerCase())?.has(item.number),
+        );
+        skipped += batch.items.length - unseen.length;
+        items.push(...unseen);
         read += batch.rawCount;
         hasNextPage = batch.hasNextPage;
         cursor = batch.nextCursor;
         handed = supportsIssueCursor(input)
           ? wholeInstantRows(items, input.limit)
           : Math.min(items.length, input.limit);
+        if (batch.rawCount === 0) break;
       } while (
         cursor !== null &&
         read < ISSUE_SEARCH_MAX_RESULTS &&
-        supportsIssueCursor(input) &&
-        instantRunsOn(items, input.limit, handed)
+        (items.length < input.limit ||
+          (supportsIssueCursor(input) && instantRunsOn(items, input.limit, handed)))
       );
       return {
         items: items.slice(0, handed),
@@ -799,12 +851,14 @@ const make = Effect.gen(function* () {
         // search may be paged, so this is every row the host will answer this query with:
         // offering a continuation would hand back a cursor answered with these same rows.
         ceilingReached:
-          read >= ISSUE_SEARCH_MAX_RESULTS && instantRunsOn(items, input.limit, handed),
+          hasNextPage &&
+          read >= ISSUE_SEARCH_MAX_RESULTS &&
+          (items.length < input.limit || instantRunsOn(items, input.limit, handed)),
         truncated: supportsIssueCursor(input)
           ? instantRunsOn(items, input.limit, handed)
             ? false
-            : read > Math.max(input.limit, handed) || hasNextPage
-          : read > input.limit || hasNextPage,
+            : read - skipped > Math.max(input.limit, handed) || hasNextPage
+          : read - skipped > input.limit || hasNextPage,
       };
     });
   };
@@ -1139,10 +1193,15 @@ const make = Effect.gen(function* () {
           }).pipe(
             // A repository whose tree this account may not walk still has templates worth showing,
             // so the questions are lost rather than the chooser.
-            Effect.orElseSucceed(() => ({
-              forms: [] as ReadonlyArray<IssueTemplate>,
-              contributingGuidelinesUrl: undefined,
-            })),
+            Effect.catch((error) =>
+              error._tag === "GitHubApiRateLimitError" ||
+              error._tag === "SourceControlRateLimitPausedError"
+                ? Effect.fail(error)
+                : Effect.succeed({
+                    forms: [] as ReadonlyArray<IssueTemplate>,
+                    contributingGuidelinesUrl: undefined,
+                  }),
+            ),
           ),
           api
             .rest({
@@ -1153,7 +1212,12 @@ const make = Effect.gen(function* () {
             })
             .pipe(
               Effect.map((response) => decodeIssueTemplateConfigYaml(response.body)),
-              Effect.orElseSucceed(() => DEFAULT_ISSUE_TEMPLATE_CONFIG),
+              Effect.catch((error) =>
+                error._tag === "GitHubApiRateLimitError" ||
+                error._tag === "SourceControlRateLimitPausedError"
+                  ? Effect.fail(error)
+                  : Effect.succeed(DEFAULT_ISSUE_TEMPLATE_CONFIG),
+              ),
             ),
         ],
         { concurrency: 3 },

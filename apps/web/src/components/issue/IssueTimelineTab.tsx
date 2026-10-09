@@ -130,8 +130,8 @@ export function IssueTimelineTab({
                   );
                 }}
                 renderBody={(entry) => {
-                  const comment = editableComment(entry);
-                  return editingId === entry.id && comment !== null ? (
+                  const comment = comments.get(entry.id);
+                  return editingId === entry.id && comment !== undefined ? (
                     <SourceControlMarkdownEditor
                       value={comment.body}
                       cwd={detail.workspaceRoot}

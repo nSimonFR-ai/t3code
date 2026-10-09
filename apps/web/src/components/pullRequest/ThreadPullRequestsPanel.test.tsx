@@ -4,18 +4,19 @@ import type { ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts"
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { ThreadPullRequestsPanel } from "./ThreadPullRequestsPanel";
 
-const { shell, capabilities, update, openIssue, openInBrowser, modifiers, perform } = vi.hoisted(
-  () => ({
+const { shell, tracker, capabilities, update, openIssue, openInBrowser, modifiers, perform } =
+  vi.hoisted(() => ({
     shell: vi.fn(),
+    tracker: vi.fn((_reference: unknown): unknown => null),
     capabilities: vi.fn(() => ({ threadPullRequests: true, issues: true })),
     update: vi.fn(async () => ({ _tag: "Success" })),
     openIssue: vi.fn(),
     openInBrowser: vi.fn(),
     modifiers: vi.fn(() => ({ shiftKey: false, metaKey: false, ctrlKey: false, altKey: false })),
     perform: vi.fn(),
-  }),
-);
+  }));
 vi.mock("~/shortcutModifierState", () => ({ useShortcutModifierState: modifiers }));
+vi.mock("~/hooks/useLiveRefresh", () => ({ useLiveRefresh: () => {} }));
 vi.mock("./usePullRequestActions", () => ({
   usePullRequestActionRunner: () => ({ actionPending: false, perform }),
   usePullRequestDefaultMergeMethodResolver: () => () => undefined,
@@ -38,11 +39,17 @@ vi.mock("~/state/entities", () => ({
   ],
   useServerConfigs: () => new Map([["remote", { environment: { capabilities: capabilities() } }]]),
 }));
-// No tree is read here, so each issue shows as its plain linked row.
 vi.mock("~/state/query", () => ({
-  useEnvironmentQuery: () => ({ data: null, isPending: false, error: null, refresh: () => {} }),
+  useEnvironmentQuery: (reference: unknown) => ({
+    data: tracker(reference),
+    isPending: false,
+    error: null,
+    refresh: () => {},
+  }),
 }));
-vi.mock("~/state/issues", () => ({ issueEnvironment: { detail: () => null, invalidate: null } }));
+vi.mock("~/state/issues", () => ({
+  issueEnvironment: { detail: ({ input }: { input: unknown }) => input, invalidate: null },
+}));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => update }));
 vi.mock("~/rightPanelStore", () => ({ useRightPanelStore: { getState: () => ({ openIssue }) } }));
 vi.mock("~/lib/openIssueLink", async (importOriginal) => ({
@@ -104,6 +111,7 @@ let renderer: ReactTestRenderer;
 afterEach(async () => {
   await act(() => renderer?.unmount());
   vi.clearAllMocks();
+  tracker.mockReturnValue(null);
   capabilities.mockReturnValue({ threadPullRequests: true, issues: true });
   modifiers.mockReturnValue({ shiftKey: false, metaKey: false, ctrlKey: false, altKey: false });
 });
@@ -120,10 +128,34 @@ async function click(url: string) {
   await act(() => link.props.onClick({ preventDefault: vi.fn() }));
 }
 
+function answerWith(issues: ReadonlyArray<typeof issue>) {
+  const answers = issues.map((saved) => ({ ...saved, title: saved.url, state: "open" }));
+  tracker.mockImplementation((reference) => {
+    const { provider, repository, number } = reference as typeof issue;
+    return answers.find(
+      (answer) =>
+        answer.provider === provider &&
+        answer.repository === repository &&
+        answer.number === number,
+    );
+  });
+}
+
+async function clickTree(url: string) {
+  const row = renderer.root.find(
+    (node) =>
+      node.type === "button" &&
+      node.props.role === "treeitem" &&
+      node.findAll((child) => child.children.includes(url)).length > 0,
+  );
+  await act(() => row.props.onClick());
+}
+
 it("opens each issue in the project its URL names, and Linear in the thread's project", async () => {
+  answerWith([issue, otherProject, linear]);
   await render([issue, otherProject, linear]);
-  await click(otherProject.url);
-  await click(linear.url);
+  await clickTree(otherProject.url);
+  await clickTree(linear.url);
   expect(openIssue.mock.calls).toEqual([
     [
       ref,
@@ -160,8 +192,9 @@ it("explains that both kinds of linked items are unavailable", async () => {
 });
 
 it("keeps the saved source project for Linear", async () => {
+  answerWith([linear]);
   await render([{ ...linear, projectId: "project-2" }]);
-  await click(linear.url);
+  await clickTree(linear.url);
   expect(openIssue).toHaveBeenCalledWith(ref, {
     projectId: "project-2",
     provider: "linear",
@@ -186,9 +219,31 @@ it("opens an issue from a host no project in this environment uses in the browse
 
 it("lists issues on servers that support issues but not multiple pull requests", async () => {
   capabilities.mockReturnValue({ threadPullRequests: false, issues: true });
+  answerWith([issue]);
+  await render([issue]);
+  await clickTree(issue.url);
+  expect(openIssue).toHaveBeenCalledOnce();
+});
+
+it("opens a saved issue in the browser when the tracker answers with another one", async () => {
+  tracker.mockReturnValue({
+    ...linear,
+    title: "Other workspace",
+    url: "https://linear.app/other/issue/ENG-12",
+    state: "open",
+  });
+  await render([linear]);
+  expect(renderer.root.findAll((node) => node.props.role === "treeitem")).toEqual([]);
+  await click(linear.url);
+  expect(openIssue).not.toHaveBeenCalled();
+  expect(openInBrowser).toHaveBeenCalledExactlyOnceWith(linear.url);
+});
+
+it("opens a saved issue whose tree could not be read in the browser", async () => {
   await render([issue]);
   await click(issue.url);
-  expect(openIssue).toHaveBeenCalledOnce();
+  expect(openIssue).not.toHaveBeenCalled();
+  expect(openInBrowser).toHaveBeenCalledExactlyOnceWith(issue.url);
 });
 
 it("opens issues in the browser when the server cannot read them", async () => {
@@ -283,6 +338,7 @@ it.each([
       },
     } satisfies ThreadPullRequestLink;
     shell.mockReturnValue({ projectId: "project-1", pullRequests: [linked], issues: [issue] });
+    answerWith([issue]);
     await act(() => {
       renderer = create(<ThreadPullRequestsPanel threadRef={ref} />);
     });
@@ -300,7 +356,7 @@ it.each([
       await act(() => buttons[0]!.props.onClick());
       expect(perform).toHaveBeenCalledExactlyOnceWith(action);
     }
-    await click(issue.url);
+    await clickTree(issue.url);
     expect(openIssue).toHaveBeenCalledWith(ref, {
       projectId: "project-1",
       provider: "github",

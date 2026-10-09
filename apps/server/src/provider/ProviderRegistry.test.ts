@@ -23,6 +23,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   DEFAULT_SERVER_SETTINGS,
+  PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS,
   ProviderDriverKind,
   ProviderInstanceId,
   ServerSettings,
@@ -1769,6 +1770,13 @@ it.layer(
           );
           yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
           assert.strictEqual(yield* Ref.get(snapshotCalls), 3);
+          // Nothing watches skill directories, so an expired scan is redone on use.
+          yield* TestClock.adjust(PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS - 1);
+          yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
+          assert.strictEqual(yield* Ref.get(snapshotCalls), 3);
+          yield* TestClock.adjust(1);
+          yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
+          assert.strictEqual(yield* Ref.get(snapshotCalls), 4);
           const newSkills = [
             ...scopedProvider.skills,
             { name: "added", path: "/workspace/added/SKILL.md", enabled: true },
@@ -1779,7 +1787,7 @@ it.layer(
             cwd: "/workspace",
             fresh: true,
           });
-          assert.strictEqual(yield* Ref.get(snapshotCalls), 4);
+          assert.strictEqual(yield* Ref.get(snapshotCalls), 5);
           assert.strictEqual(yield* Ref.get(cacheInvalidations), 1);
           assert.deepStrictEqual(
             (yield* registry.getProviders)[0]?.workspaceSnapshots?.map((s) => s.skills),
@@ -3044,12 +3052,16 @@ it.layer(
               "codex",
               "cursor",
               "grok",
+              "muse",
               "opencode",
               "pi",
             ]);
             assert.strictEqual(cursorProvider?.enabled, false);
             assert.strictEqual(cursorProvider?.status, "disabled");
             assert.strictEqual(cursorProvider?.message, "Cursor is disabled in T3 Code settings.");
+            const museProvider = providers.find((provider) => provider.driver === "muse");
+            assert.strictEqual(museProvider?.enabled, false);
+            assert.strictEqual(museProvider?.status, "disabled");
             assert.strictEqual(cursorSpawned, false);
           }).pipe(Effect.provide(runtimeServices));
         }),

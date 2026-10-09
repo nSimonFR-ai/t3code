@@ -71,6 +71,7 @@ function reasonFor(
 ): IssueProviderError["reason"] {
   if (error._tag === "AzureDevOpsCliUnavailableError") return "missing-tool";
   if (error._tag === "AzureDevOpsCliAuthenticationError") return "unauthenticated";
+  if (error._tag === "AzureDevOpsCliRateLimitError") return "rate-limited";
   return "failed";
 }
 

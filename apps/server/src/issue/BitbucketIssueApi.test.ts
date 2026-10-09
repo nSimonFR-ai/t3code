@@ -75,28 +75,41 @@ afterEach(() => {
 });
 
 layer("BitbucketIssueApi.layer", (it) => {
-  it.effect(
-    "pages through tied updates without loss and reads the oldest slice in ascending order",
-    () =>
+  it.effect.each([1, 10])(
+    "pages through microsecond updates without loss at limit $0 and reads ascending slices",
+    (limit) =>
       Effect.gen(function* () {
-        const rows = Array.from({ length: 63 }, (_, index) => ({
+        const rows = Array.from({ length: 64 }, (_, index) => ({
           id: index + 1,
           title: `Issue ${index + 1}`,
           links: { html: { href: `https://bitbucket.org/acme/web/issues/${index + 1}` } },
           state: "open",
           created_on: "2026-07-01T00:00:00.000Z",
           updated_on:
-            index < 61 ? "2026-07-03T00:00:00.000Z" : `2026-07-0${63 - index}T00:00:00.000Z`,
+            index === 0
+              ? "2026-07-03T00:00:00.124000Z"
+              : index < 32
+                ? "2026-07-03T00:00:00.123456Z"
+                : index < 62
+                  ? "2026-07-03T00:00:00.123100Z"
+                  : `2026-07-0${64 - index}T00:00:00.000000Z`,
         }));
         mockedRequest.mockImplementation(({ url }) => {
           const params = new URL(url, "https://bitbucket.test").searchParams;
           const filter = params.get("q") ?? "";
-          const before = /updated_on <= ([^ ]+)/.exec(filter)?.[1];
+          const cutoff = /updated_on (<|<=) ([^ ]+)/.exec(filter);
+          const before = cutoff?.[2]?.replace(
+            /(\.\d+)Z$/,
+            (_, fraction: string) => `${fraction.padEnd(7, "0")}Z`,
+          );
           const seen = new Set(
             Array.from(filter.matchAll(/id != (\d+)/g), (match) => Number(match[1])),
           );
           const selected = rows.filter(
-            (row) => (before === undefined || row.updated_on <= before) && !seen.has(row.id),
+            (row) =>
+              (before === undefined ||
+                (cutoff?.[1] === "<" ? row.updated_on < before : row.updated_on <= before)) &&
+              !seen.has(row.id),
           );
           selected.sort(
             (left, right) =>
@@ -124,17 +137,17 @@ layer("BitbucketIssueApi.layer", (it) => {
           state: "open",
           involvement: "all",
           viewer: "bilal",
-          limit: 10,
+          limit,
         } as const;
         const delivered: number[] = [];
         let cursor: ProviderListCursor | undefined;
         let truncated = true;
-        for (let page = 0; page < 8 && truncated; page++) {
+        for (let page = 0; page < rows.length && truncated; page++) {
           const batch = yield* provider.listIssues({ ...input, cursor });
           delivered.push(...batch.items.map((item) => item.number));
           truncated = batch.truncated;
           const boundary = batch.items.at(-1)?.updatedAt;
-          assert.isDefined(boundary);
+          if (boundary === undefined) break;
           cursor = {
             updatedBefore: boundary,
             seenAt: [
@@ -148,7 +161,9 @@ layer("BitbucketIssueApi.layer", (it) => {
         expect(delivered).toEqual(rows.map((row) => row.id));
         assert.isFalse(truncated);
         const oldest = yield* provider.listIssues({ ...input, order: "asc" });
-        expect(oldest.items.map((item) => item.number)).toEqual([63, 62, 1, 2, 3, 4, 5, 6, 7, 8]);
+        expect(oldest.items.map((item) => item.number)).toEqual(
+          [64, 63, 33, 34, 35, 36, 37, 38, 39, 40].slice(0, limit),
+        );
         assert.isTrue(oldest.truncated);
         assert.isFalse(oldest.continues);
       }),
@@ -429,7 +444,7 @@ layer("BitbucketIssueApi.layer", (it) => {
         cursor: { updatedBefore: "2026-07-02T00:00:00.123456+00:00" },
       });
 
-      expect(filterOfCall(0)).toContain("updated_on <= 2026-07-02T00:00:00.123456+00:00");
+      expect(filterOfCall(0)).toContain("updated_on < 2026-07-02T00:00:00.124Z");
     }),
   );
 

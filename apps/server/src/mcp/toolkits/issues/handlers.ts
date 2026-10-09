@@ -146,6 +146,18 @@ const make = Effect.gen(function* () {
             host: url.host,
           };
         }
+        const linkedDetail = linked === undefined ? undefined : yield* issues.detail(ref);
+        if (
+          linked !== undefined &&
+          linkedDetail !== undefined &&
+          (linkedDetail.provider !== linked.provider ||
+            normalizeWorkItemLinkKey(linkedDetail).url !== normalizeWorkItemLinkKey(linked).url)
+        ) {
+          return yield* new IssueOperationError({
+            operation: "read",
+            detail: "The resolved issue does not match the linked issue URL.",
+          });
+        }
         if (input.commentsCursor !== undefined) {
           const page = yield* issues.commentsPage({ ...ref, cursor: input.commentsCursor });
           const comments = {
@@ -159,7 +171,7 @@ const make = Effect.gen(function* () {
             nextCommentsCursor: page.nextCursor,
           };
         }
-        const issue = yield* issues.detail(ref);
+        const issue = linkedDetail ?? (yield* issues.detail(ref));
         const activity = yield* issues.activity(ref);
         return {
           markdown: issueMarkdown(
@@ -303,7 +315,10 @@ const make = Effect.gen(function* () {
         const pullRequestRef = { projectId: thread.projectId, ...reference };
         const detail =
           kind === "issue"
-            ? yield* issues.detail(issueRef(thread.projectId, reference))
+            ? yield* issues.detail({
+                ...issueRef(thread.projectId, reference),
+                ...(reference.host === undefined ? {} : { host: reference.host }),
+              })
             : yield* pullRequests.withRoutingCredential(
                 pullRequestRef,
                 pullRequests.detail(pullRequestRef),

@@ -64,3 +64,36 @@ it.each([false, true])(
     expect(renderer.root.findByType("textarea").props.value).toBe(commentPosted ? "" : "Done");
   },
 );
+
+it("keeps a draft while posting is blocked and posts it once unblocked", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  post.mockResolvedValue({ _tag: "Success" });
+  const composer = (actionPending: boolean) => (
+    <CommentComposer
+      environmentId={"local" as EnvironmentId}
+      detail={{ projectId: "project" as ProjectId, repository: "acme/app", number: 1 }}
+      label="Comment on this issue"
+      command={issueEnvironment.comment}
+      actionPending={actionPending}
+      onCommented={() => undefined}
+    />
+  );
+  const send = () =>
+    renderer.root.findAllByType("button").find((button) => button.children.includes("Comment"))!
+      .props.onClick;
+  await act(() => {
+    renderer = create(composer(false));
+  });
+  await act(() =>
+    renderer.root.findByType(Textarea).props.onChange({ target: { value: "Draft" } }),
+  );
+  await act(() => renderer.update(composer(true)));
+  await act(() => send()());
+  expect(post).not.toHaveBeenCalled();
+  expect(renderer.root.findByType("textarea").props.value).toBe("Draft");
+  await act(() => renderer.update(composer(false)));
+  await act(() => send()());
+  expect(post).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ input: expect.objectContaining({ body: "Draft" }) }),
+  );
+});

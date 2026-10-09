@@ -8,6 +8,7 @@ import { DialogPopup } from "../ui/dialog";
 const createIssue = vi.hoisted(() => vi.fn());
 let pending = false;
 let blankIssuesEnabled = true;
+let allowed = true;
 vi.mock("react", async (original) => {
   const actual = await original<typeof import("react")>();
   const { reactHookHarness } = await import("~/test/reactHookHarness");
@@ -22,11 +23,12 @@ vi.mock("react/compiler-runtime", async () => {
   const { reactHookHarness } = await import("~/test/reactHookHarness");
   return { c: reactHookHarness.useMemoCache };
 });
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => allowed }));
 vi.mock("~/state/entities", () => ({
   useProjects: () => [{ id: "p1", repositoryIdentity: { displayName: "acme/web" } }],
 }));
 vi.mock("~/state/issues", () => ({
-  issueEnvironment: { templates: () => "templates", create: "create" },
+  issueEnvironment: { templates: () => "templates", create: { permissionAtom: () => null } },
 }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: () => ({
@@ -55,6 +57,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   pending = false;
   blankIssuesEnabled = true;
+  allowed = true;
 });
 
 it("blocks the submit shortcut while templates load and when blank issues are disabled", async () => {
@@ -76,6 +79,10 @@ it("blocks the submit shortcut while templates load and when blank issues are di
       preventDefault: vi.fn(),
     });
   };
+  allowed = false;
+  submit();
+  expect(createIssue).not.toHaveBeenCalled();
+  allowed = true;
   pending = true;
   submit();
   expect(createIssue).not.toHaveBeenCalled();

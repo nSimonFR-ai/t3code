@@ -11,6 +11,7 @@ import type {
   IssueState,
   IssueViewerPermissions,
 } from "@t3tools/contracts";
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as LinearConnection from "./LinearConnection.ts";
@@ -110,15 +111,20 @@ function actor(user: LinearApi.LinearUser | null | undefined) {
 }
 
 const PULL_REQUEST_URL =
-  /^https:\/\/(?:github\.com\/([^/]+\/[^/]+)\/pull|gitlab\.com\/(.+?)\/-\/merge_requests)\/(\d+)/;
+  /^https:\/\/(?:github\.com\/([^/]+\/[^/]+)\/pull|gitlab\.com\/(.+?)\/-\/merge_requests)\/(\d+)\/?(?:[?#]|$)/u;
 
-/** Pull requests Linear's Git integrations attached to the issue, which merging closes by default. */
 export function linearLinkedPullRequests(
   attachments: ReadonlyArray<LinearApi.LinearAttachment>,
 ): Array<IssueLinkedPullRequest> {
+  const seen = new Set<string>();
   return attachments.flatMap((attachment) => {
     const match = PULL_REQUEST_URL.exec(attachment.url);
     if (match === null) return [];
+    const reference = parseChangeRequestUrl(attachment.url);
+    if (reference === null) return [];
+    const key = `${reference.host}/${reference.repository}#${reference.number}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
     const status = attachment.metadata?.status;
     return [
       {
@@ -128,7 +134,7 @@ export function linearLinkedPullRequests(
         url: attachment.url,
         state: status === "merged" ? "merged" : status === "closed" ? "closed" : "open",
         isDraft: status === "draft" || attachment.metadata?.draft === true,
-        closesIssue: true,
+        closesIssue: false,
       },
     ];
   });
@@ -136,6 +142,7 @@ export function linearLinkedPullRequests(
 
 function toRelative(issue: LinearApi.LinearRelative): IssueRelative {
   return {
+    repository: issue.team.key,
     number: issue.number,
     title: issue.title,
     url: issue.url,

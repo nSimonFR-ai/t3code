@@ -22,7 +22,8 @@ import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit
 import type { ProviderListCursor } from "./IssueProvider.ts";
 
 const API_URL = "https://api.linear.app/graphql";
-const MAX_PAGE = 250;
+const MAX_PAGE = 150;
+const ISSUE_COMPLEXITY = 5_000;
 
 const LINEAR_CREDENTIALS_SECRET = "issue-trackers.linear.credentials";
 
@@ -78,6 +79,7 @@ interface Relative {
   readonly number: number;
   readonly title: string;
   readonly url: string;
+  readonly team: { readonly key: string };
   readonly state: typeof State.Type;
   readonly attachments?:
     | { readonly nodes: ReadonlyArray<typeof Attachment.Type> }
@@ -90,6 +92,7 @@ const Relative: Schema.Codec<Relative> = Schema.Struct({
   number: Schema.Number,
   title: Schema.String,
   url: Schema.String,
+  team: Schema.Struct({ key: Schema.String }),
   state: State,
   attachments: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Attachment) }))),
   parent: Schema.optional(Schema.NullOr(Schema.suspend((): Schema.Codec<Relative> => Relative))),
@@ -147,12 +150,18 @@ const ConnectionEnvelope = Schema.Struct({
   }),
 });
 const ViewerEnvelope = Schema.Struct({ ...Errors, data: Schema.Struct({ viewer: User }) });
+const isViewerEnvelope = Schema.is(ViewerEnvelope);
 const ListEnvelope = Schema.Struct({
   ...Errors,
   data: Schema.Struct({
     issues: Schema.Struct({
       nodes: Schema.Array(Issue),
-      pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean, hasPreviousPage: Schema.Boolean }),
+      pageInfo: Schema.Struct({
+        hasNextPage: Schema.Boolean,
+        hasPreviousPage: Schema.Boolean,
+        startCursor: Schema.optional(Schema.NullOr(Schema.String)),
+        endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
     }),
   }),
 });
@@ -190,7 +199,7 @@ const MutationEnvelope = Schema.Struct({
 const USER_FIELDS = "id name email avatarUrl";
 const REACTION_FIELDS = `id emoji user { ${USER_FIELDS} }`;
 // Three levels each way bounds the query's complexity; deeper relatives open from the tree.
-const RELATIVE_FIELDS = "number title url state { name type }";
+const RELATIVE_FIELDS = "number title url team { key } state { name type }";
 // Pull requests only on the levels nearest the issue, which keeps the query under Linear's cost limit.
 const RELATIVE_WITH_PULL_REQUESTS = `${RELATIVE_FIELDS} attachments(first: 5) { nodes { url title sourceType metadata } }`;
 const ISSUE_FIELDS = `
@@ -206,26 +215,29 @@ const CONNECTION_QUERY = `query T3LinearConnection {
   teams(first: 250) { nodes { id key name } }
 }`;
 const VIEWER_QUERY = `query T3LinearViewer { viewer { ${USER_FIELDS} } }`;
-const LIST_QUERY = `query T3LinearIssues($first: Int, $last: Int, $filter: IssueFilter!) {
-  issues(first: $first, last: $last, filter: $filter, orderBy: updatedAt) {
+const LIST_QUERY = `query T3LinearIssues($first: Int, $last: Int, $after: String, $before: String, $filter: IssueFilter!) {
+  issues(first: $first, last: $last, after: $after, before: $before, filter: $filter, orderBy: updatedAt) {
     nodes { ${ISSUE_FIELDS} }
-    pageInfo { hasNextPage hasPreviousPage }
+    pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
   }
 }`;
 const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
   issue(id: $id) {
     ${ISSUE_FIELDS}
-    attachments { nodes { url title sourceType metadata } }
+    attachments(first: 50) { nodes { url title sourceType metadata } }
     parent { ${RELATIVE_WITH_PULL_REQUESTS} parent { ${RELATIVE_FIELDS} parent { ${RELATIVE_FIELDS} } } }
-    children(first: 50) {
+    children(first: 20) {
       nodes {
         ${RELATIVE_WITH_PULL_REQUESTS}
-        children(first: 20) {
-          nodes { ${RELATIVE_FIELDS} children(first: 10) { nodes { ${RELATIVE_FIELDS} } } }
+        children(first: 10) {
+          nodes { ${RELATIVE_FIELDS} children(first: 5) { nodes { ${RELATIVE_FIELDS} } } }
         }
       }
     }
   }
+}`;
+const SUMMARY_QUERY = `query T3LinearIssueSummary($id: String!) {
+  issue(id: $id) { number title url state { name type } }
 }`;
 const ACTIVITY_QUERY = `query T3LinearIssueActivity($id: String!, $comments: Int!) {
   viewer { id name email avatarUrl }
@@ -255,6 +267,19 @@ const COMMENT_REACTIONS_QUERY = `query T3LinearCommentReactions($id: String!) {
   viewer { id name email avatarUrl }
   comment(id: $id) { reactions { ${REACTION_FIELDS} } }
 }`;
+const QUERY_ENDPOINTS = new Map<string, ReadonlyArray<string>>([
+  [CONNECTION_QUERY, ["viewer", "teams"]],
+  [VIEWER_QUERY, ["viewer"]],
+  [LIST_QUERY, ["issues"]],
+  [ISSUE_QUERY, ["issue"]],
+  [SUMMARY_QUERY, ["issue"]],
+  [ACTIVITY_QUERY, ["viewer", "issue"]],
+  [ISSUE_REACTIONS_QUERY, ["viewer", "issue"]],
+  [COMMENT_REACTIONS_QUERY, ["viewer", "comment"]],
+  [COMMENT_MUTATION, ["commentCreate"]],
+  [REACTION_CREATE_MUTATION, ["reactionCreate"]],
+  [REACTION_DELETE_MUTATION, ["reactionDelete"]],
+]);
 
 export class LinearApiError extends Schema.TaggedError<LinearApiError>()("LinearApiError", {
   operation: Schema.String,
@@ -380,6 +405,12 @@ const make = Effect.gen(function* () {
   const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const rateLimitKey = { provider: "linear", host: new URL(config.baseUrl).host };
   const credentialPoolMutex = yield* Semaphore.make(1);
+  // ponytail: one shared request slot; use per-account slots if throughput becomes a constraint.
+  const requestGate = yield* Semaphore.make(1);
+  const complexityBudgets = new Map<string, { remaining: number; reset: number }>();
+  const documentCosts = new Map<string, number>();
+  const verifiedTokenScopes = new Map<string, string>();
+  const tokenEndpoints = new Map<string, Set<string>>();
 
   const readSecret = (name: string, operation: string) =>
     secrets.get(name).pipe(
@@ -429,6 +460,14 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
+  const checkRateLimit = (operation: string, scope: string, allowPaused = false) =>
+    rateLimits.check(rateLimitKey, { allowPaused }).pipe(
+      Effect.provideService(SourceControlRateLimit.CredentialScope, scope),
+      Effect.mapError(
+        (cause) =>
+          new LinearApiError({ operation, reason: "rate-limited", retryAt: cause.retryAt, cause }),
+      ),
+    );
   const requestWithToken = <S extends Schema.Codec<unknown, unknown, never, never>>(
     key: string,
     operation: string,
@@ -437,32 +476,40 @@ const make = Effect.gen(function* () {
     schema: S,
   ): Effect.Effect<S["Type"], LinearApiError> =>
     Effect.gen(function* () {
-      const lease = yield* rateLimits.check(rateLimitKey).pipe(
-        Effect.mapError(
-          (cause) =>
-            new LinearApiError({
-              operation,
-              reason: "rate-limited",
-              retryAt: cause.retryAt,
-              cause,
-            }),
-        ),
+      const tokenScope = Hex.encode(sha256(new TextEncoder().encode(key)));
+      let credentialScope = verifiedTokenScopes.get(tokenScope) ?? tokenScope;
+      const queryEndpoints = QUERY_ENDPOINTS.get(document)!;
+      if (credentialScope === tokenScope) {
+        const endpoints = tokenEndpoints.get(tokenScope) ?? new Set<string>();
+        for (const endpoint of queryEndpoints) endpoints.add(endpoint);
+        tokenEndpoints.set(tokenScope, endpoints);
+      }
+      let lease = yield* checkRateLimit(operation, credentialScope);
+      let endpointLeases = yield* Effect.forEach(queryEndpoints, (endpoint) =>
+        checkRateLimit(operation, `${credentialScope}\0${endpoint}`),
       );
-      const credentialScope = yield* SourceControlRateLimit.CredentialScope;
-      const endpointScope = `${credentialScope}\0${operation}`;
-      const endpointLease = yield* rateLimits.check(rateLimitKey).pipe(
-        Effect.provideService(SourceControlRateLimit.CredentialScope, endpointScope),
-        Effect.mapError(
-          (cause) =>
-            new LinearApiError({
-              operation,
-              reason: "rate-limited",
-              retryAt: cause.retryAt,
-              cause,
-            }),
-        ),
-      );
-      let endpointOnly = false;
+      const now = yield* Clock.currentTimeMillis;
+      const costKey = [document, variables.first, variables.last].join("\0");
+      const cost =
+        document === ISSUE_QUERY
+          ? ISSUE_COMPLEXITY
+          : document === LIST_QUERY
+            ? Math.max(
+                Math.ceil(66 * Number(variables.first ?? variables.last) + 1.4),
+                documentCosts.get(costKey) ?? 0,
+              )
+            : (documentCosts.get(costKey) ?? 0);
+      const budget = complexityBudgets.get(credentialScope);
+      if (budget !== undefined && budget.reset <= now) complexityBudgets.delete(credentialScope);
+      if (budget !== undefined && budget.reset > now) {
+        if (budget.remaining < cost)
+          return yield* new LinearApiError({
+            operation,
+            reason: "rate-limited",
+            retryAt: budget.reset,
+          });
+        budget.remaining = Math.max(0, budget.remaining - cost);
+      }
       return yield* http
         .execute(
           HttpClientRequest.post(config.baseUrl).pipe(
@@ -476,6 +523,26 @@ const make = Effect.gen(function* () {
           Effect.flatMap((response) =>
             Effect.gen(function* () {
               const now = yield* Clock.currentTimeMillis;
+              const reportedCost = Number(response.headers["x-complexity"]);
+              if (Number.isFinite(reportedCost) && reportedCost >= 0) {
+                documentCosts.set(costKey, reportedCost);
+                if (budget !== undefined && budget.reset > now)
+                  budget.remaining = Math.max(
+                    0,
+                    budget.remaining - Math.max(0, reportedCost - cost),
+                  );
+              }
+              const remaining = Number(response.headers["x-ratelimit-complexity-remaining"]);
+              const reset = Number(
+                response.headers["x-ratelimit-complexity-reset"] ?? budget?.reset,
+              );
+              if (
+                Number.isFinite(remaining) &&
+                remaining >= 0 &&
+                Number.isFinite(reset) &&
+                reset > now
+              )
+                complexityBudgets.set(credentialScope, { remaining, reset });
               const resets = ["requests", "complexity"].flatMap((kind) => {
                 const remaining = response.headers[`x-ratelimit-${kind}-remaining`];
                 const reset = Number(response.headers[`x-ratelimit-${kind}-reset`]);
@@ -488,6 +555,29 @@ const make = Effect.gen(function* () {
               });
               const endpointRemaining = response.headers["x-ratelimit-endpoint-requests-remaining"];
               const endpointReset = Number(response.headers["x-ratelimit-endpoint-requests-reset"]);
+              const reportedEndpoint = response.headers["x-ratelimit-endpoint-name"];
+              const limitedEndpoints =
+                reportedEndpoint !== undefined && queryEndpoints.includes(reportedEndpoint)
+                  ? [reportedEndpoint]
+                  : queryEndpoints;
+              const recordEndpoints = (retryAt?: number) =>
+                Effect.forEach(limitedEndpoints, (endpoint) => {
+                  const input = {
+                    ...rateLimitKey,
+                    lease: endpointLeases[queryEndpoints.indexOf(endpoint)]!,
+                    retryAt,
+                  };
+                  return (
+                    retryAt === undefined
+                      ? rateLimits.recordSuccess(input)
+                      : rateLimits.recordRateLimit(input)
+                  ).pipe(
+                    Effect.provideService(
+                      SourceControlRateLimit.CredentialScope,
+                      `${credentialScope}\0${endpoint}`,
+                    ),
+                  );
+                });
               const endpointRetryAt =
                 endpointRemaining !== undefined &&
                 Number(endpointRemaining) <= 0 &&
@@ -495,19 +585,40 @@ const make = Effect.gen(function* () {
                 endpointReset > now
                   ? endpointReset
                   : undefined;
-              endpointOnly = resets.length === 0 && endpointRetryAt !== undefined;
-              const retryAt =
-                SourceControlRateLimit.retryAtFromHeader(response.headers["retry-after"], now) ??
-                (resets.length > 0 ? Math.max(...resets) : endpointRetryAt);
+              const retryAfter = SourceControlRateLimit.retryAtFromHeader(
+                response.headers["retry-after"],
+                now,
+              );
+              const retryTimes = [
+                ...resets,
+                ...(endpointRetryAt === undefined ? [] : [endpointRetryAt]),
+                ...(retryAfter === undefined ? [] : [retryAfter]),
+              ];
+              const retryAt = retryTimes.length === 0 ? undefined : Math.max(...retryTimes);
               const limited = () =>
-                Effect.fail(
-                  new LinearApiError({
+                Effect.gen(function* () {
+                  if (resets.length > 0 || endpointRetryAt === undefined)
+                    yield* rateLimits
+                      .recordRateLimit({
+                        ...rateLimitKey,
+                        lease,
+                        retryAt: endpointRetryAt === undefined ? retryAt : Math.max(...resets),
+                      })
+                      .pipe(
+                        Effect.provideService(
+                          SourceControlRateLimit.CredentialScope,
+                          credentialScope,
+                        ),
+                      );
+                  if (endpointRetryAt !== undefined)
+                    yield* recordEndpoints(Math.max(endpointRetryAt, retryAfter ?? 0));
+                  return yield* new LinearApiError({
                     operation,
                     reason: "rate-limited",
                     status: response.status,
                     ...(retryAt === undefined ? {} : { retryAt }),
-                  }),
-                );
+                  });
+                }).pipe(Effect.uninterruptible);
               if (response.status === 429) return yield* limited();
               if (response.status === 401 || response.status === 403)
                 return yield* new LinearApiError({ operation, reason: "unauthenticated" });
@@ -549,55 +660,86 @@ const make = Effect.gen(function* () {
                   (cause) => new LinearApiError({ operation, reason: "failed", cause }),
                 ),
               );
-              if (resets.length > 0)
-                yield* rateLimits.recordRateLimit({
-                  ...rateLimitKey,
-                  lease,
-                  retryAt: Math.max(...resets),
-                });
-              else yield* rateLimits.recordSuccess({ ...rateLimitKey, lease });
-              if (endpointRetryAt !== undefined)
-                yield* rateLimits
-                  .recordRateLimit({
-                    ...rateLimitKey,
-                    lease: endpointLease,
-                    retryAt: endpointRetryAt,
-                  })
-                  .pipe(
-                    Effect.provideService(SourceControlRateLimit.CredentialScope, endpointScope),
-                  );
-              else
-                yield* rateLimits
-                  .recordSuccess({ ...rateLimitKey, lease: endpointLease })
-                  .pipe(
-                    Effect.provideService(SourceControlRateLimit.CredentialScope, endpointScope),
-                  );
-              return envelope;
+              return yield* Effect.gen(function* () {
+                if (isViewerEnvelope(envelope)) {
+                  const userScope = `user:${envelope.data.viewer.id}`;
+                  verifiedTokenScopes.set(tokenScope, userScope);
+                  if (credentialScope !== userScope) {
+                    const tokenBudget = complexityBudgets.get(credentialScope);
+                    const sharedBudget = complexityBudgets.get(userScope);
+                    if (tokenBudget !== undefined && tokenBudget.reset > now) {
+                      complexityBudgets.set(
+                        userScope,
+                        sharedBudget === undefined || sharedBudget.reset <= now
+                          ? tokenBudget
+                          : {
+                              remaining: Math.min(sharedBudget.remaining, tokenBudget.remaining),
+                              reset: Math.max(sharedBudget.reset, tokenBudget.reset),
+                            },
+                      );
+                      complexityBudgets.delete(credentialScope);
+                    }
+                    credentialScope = userScope;
+                    for (const endpoint of tokenEndpoints.get(tokenScope) ?? []) {
+                      const retryAt = yield* rateLimits.check(rateLimitKey).pipe(
+                        Effect.provideService(
+                          SourceControlRateLimit.CredentialScope,
+                          `${tokenScope}\0${endpoint}`,
+                        ),
+                        Effect.match({
+                          onFailure: (error) => error.retryAt,
+                          onSuccess: () => undefined,
+                        }),
+                      );
+                      if (retryAt !== undefined) {
+                        const scope = `${userScope}\0${endpoint}`;
+                        yield* rateLimits
+                          .recordRateLimit({
+                            ...rateLimitKey,
+                            lease: yield* checkRateLimit(operation, scope, true),
+                            retryAt,
+                          })
+                          .pipe(
+                            Effect.provideService(SourceControlRateLimit.CredentialScope, scope),
+                          );
+                      }
+                    }
+                    tokenEndpoints.delete(tokenScope);
+                    lease = yield* checkRateLimit(operation, credentialScope, true);
+                    endpointLeases = yield* Effect.forEach(queryEndpoints, (endpoint) =>
+                      checkRateLimit(operation, `${credentialScope}\0${endpoint}`, true),
+                    );
+                  }
+                }
+                if (resets.length > 0)
+                  yield* rateLimits
+                    .recordRateLimit({
+                      ...rateLimitKey,
+                      lease,
+                      retryAt: Math.max(...resets),
+                    })
+                    .pipe(
+                      Effect.provideService(
+                        SourceControlRateLimit.CredentialScope,
+                        credentialScope,
+                      ),
+                    );
+                else
+                  yield* rateLimits
+                    .recordSuccess({ ...rateLimitKey, lease })
+                    .pipe(
+                      Effect.provideService(
+                        SourceControlRateLimit.CredentialScope,
+                        credentialScope,
+                      ),
+                    );
+                yield* recordEndpoints(endpointRetryAt);
+                return envelope;
+              }).pipe(Effect.uninterruptible);
             }),
           ),
-          Effect.tapError((error) =>
-            error.reason === "rate-limited"
-              ? rateLimits
-                  .recordRateLimit({
-                    ...rateLimitKey,
-                    lease: endpointOnly ? endpointLease : lease,
-                    retryAt: error.retryAt,
-                  })
-                  .pipe(
-                    Effect.provideService(
-                      SourceControlRateLimit.CredentialScope,
-                      endpointOnly ? endpointScope : credentialScope,
-                    ),
-                  )
-              : Effect.void,
-          ),
         );
-    }).pipe(
-      Effect.provideService(
-        SourceControlRateLimit.CredentialScope,
-        Hex.encode(sha256(new TextEncoder().encode(key))),
-      ),
-    );
+    }).pipe(requestGate.withPermits(1));
 
   const credentialToken = (credentialId?: string) =>
     storedCredentials.pipe(
@@ -826,33 +968,45 @@ const make = Effect.gen(function* () {
       }
       if (input.cursor !== undefined) filter.updatedAt = { lte: input.cursor.updatedBefore };
       if (input.cursor?.seenAt?.length) filter.number = { nin: input.cursor.seenAt };
-      const size = Math.min(input.limit + 1, MAX_PAGE);
       const ascending = input.order === "asc";
-      return request(
-        input.credentialId,
-        "issue list",
-        LIST_QUERY,
-        { [ascending ? "last" : "first"]: size, filter },
-        ListEnvelope,
-      ).pipe(
-        Effect.map(({ data }) => ({
-          issues: (ascending ? data.issues.nodes.toReversed() : data.issues.nodes).slice(
-            0,
-            input.limit,
-          ),
-          truncated:
-            data.issues.nodes.length > input.limit ||
-            (ascending ? data.issues.pageInfo.hasPreviousPage : data.issues.pageInfo.hasNextPage),
-        })),
-      );
+      return Effect.gen(function* () {
+        const issues: LinearIssue[] = [];
+        let cursor: string | undefined;
+        let truncated = false;
+        for (let page = 0; page < 4; page++) {
+          const size = Math.min(input.limit + 1 - issues.length, MAX_PAGE);
+          const { data } = yield* request(
+            input.credentialId,
+            "issue list",
+            LIST_QUERY,
+            {
+              [ascending ? "last" : "first"]: size,
+              ...(cursor === undefined ? {} : { [ascending ? "before" : "after"]: cursor }),
+              filter,
+            },
+            ListEnvelope,
+          );
+          issues.push(...(ascending ? data.issues.nodes.toReversed() : data.issues.nodes));
+          truncated = ascending
+            ? data.issues.pageInfo.hasPreviousPage
+            : data.issues.pageInfo.hasNextPage;
+          const next = ascending
+            ? data.issues.pageInfo.startCursor
+            : data.issues.pageInfo.endCursor;
+          if (issues.length > input.limit || !truncated || !next || next === cursor) break;
+          cursor = next;
+        }
+        return {
+          issues: issues.slice(0, input.limit),
+          truncated: issues.length > input.limit || truncated,
+        };
+      });
     },
     getIssueSummary: ({ identifier, credentialId }) =>
       request(
         credentialId,
         "issue summary",
-        `query T3LinearIssueSummary($id: String!) {
-        issue(id: $id) { number title url state { name type } }
-      }`,
+        SUMMARY_QUERY,
         { id: identifier },
         SummaryEnvelope,
       ).pipe(

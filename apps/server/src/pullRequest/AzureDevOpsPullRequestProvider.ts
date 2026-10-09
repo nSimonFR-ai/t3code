@@ -368,7 +368,10 @@ export const make = Effect.gen(function* () {
                   }),
                 ),
                 Effect.map((listed) => listed.changes.length),
-                Effect.orElseSucceed(() => 0),
+                Effect.catchIf(
+                  (error) => error._tag !== "AzureDevOpsCliRateLimitError",
+                  () => Effect.succeed(0),
+                ),
               );
         const detail: ProviderChangeRequestDetail = {
           ...toChangeRequest(pullRequest),
@@ -391,7 +394,6 @@ export const make = Effect.gen(function* () {
 
     getChangeRequestActivity: (input) =>
       cli.getPullRequest({ cwd: input.cwd, number: input.number }).pipe(
-        Effect.mapError(fail("getChangeRequestActivity")),
         Effect.flatMap((pullRequest) =>
           (pullRequest.location === null
             ? Effect.succeed({ comments: [], truncated: true })
@@ -403,7 +405,10 @@ export const make = Effect.gen(function* () {
                 })
                 .pipe(
                   Effect.map((comments) => ({ comments, truncated: false })),
-                  Effect.orElseSucceed(() => ({ comments: [], truncated: true })),
+                  Effect.catchIf(
+                    (error) => error._tag !== "AzureDevOpsCliRateLimitError",
+                    () => Effect.succeed({ comments: [], truncated: true }),
+                  ),
                 )
           ).pipe(
             Effect.map((conversation): ProviderChangeRequestActivity => ({
@@ -415,6 +420,7 @@ export const make = Effect.gen(function* () {
             })),
           ),
         ),
+        Effect.mapError(fail("getChangeRequestActivity")),
       ),
 
     // No request at all: Azure has nothing to say about the viewer that a pull request read can

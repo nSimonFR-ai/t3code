@@ -10,7 +10,7 @@ import {
   type IssueProviderKind,
 } from "@t3tools/contracts";
 
-const FALLBACK_COOLDOWN = Duration.seconds(30);
+const FALLBACK_COOLDOWN = Duration.minutes(1);
 const MAX_FALLBACK_COOLDOWN = Duration.minutes(15);
 
 export const CredentialScope = Context.Reference<string>("t3/sourceControl/CredentialScope", {

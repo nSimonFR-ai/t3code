@@ -66,7 +66,10 @@ type DecodeFailure = Cause.Cause<Schema.SchemaError>;
  */
 function browserUrl(apiUrl: string | null | undefined, id: number): string | null {
   if (apiUrl === null || apiUrl === undefined) return null;
-  const match = /^(https?:\/\/[^/]+\/[^/]+)\/(?:[^/]+\/)?_apis\/wit\/workItems\//iu.exec(apiUrl);
+  const match =
+    /^(https?:\/\/(?:[^/]+\/[^/]+|[^/]+\.visualstudio\.com))\/(?:[^/]+\/)?_apis\/wit\/workItems\//iu.exec(
+      apiUrl,
+    );
   return match === null ? null : `${match[1]}/_workitems/edit/${id}`;
 }
 

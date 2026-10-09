@@ -91,6 +91,15 @@ export function PullRequestMarkdown({
         onOpenUrl === undefined
           ? undefined
           : (event) => {
+              if (
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              ) {
+                return;
+              }
               const anchor = (event.target as Element).closest?.("a[href]");
               if (anchor instanceof HTMLAnchorElement && onOpenUrl(anchor.href)) {
                 event.preventDefault();

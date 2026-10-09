@@ -72,8 +72,10 @@ import Migration0055 from "./Migrations/055_OrchestrationV2.ts";
 import Migration0056 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import Migration0057 from "./Migrations/057_ScheduledTaskWebhooks.ts";
 import Migration0058 from "./Migrations/058_WebhookRelayDeliveries.ts";
-import Migration0059 from "./Migrations/059_ProjectionThreadIssues.ts";
-import Migration0060 from "./Migrations/060_WorkItemLinks.ts";
+import Migration0059 from "./Migrations/059_McpAppModelContext.ts";
+import Migration0060 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
+import Migration0061 from "./Migrations/059_ProjectionThreadIssues.ts";
+import Migration0062 from "./Migrations/060_WorkItemLinks.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -146,8 +148,10 @@ export const migrationEntries = [
   [56, "RemoveRedundantProjectionIndexes", Migration0056],
   [57, "ScheduledTaskWebhooks", Migration0057],
   [58, "WebhookRelayDeliveries", Migration0058],
-  [59, "ProjectionThreadIssues", Migration0059],
-  [60, "WorkItemLinks", Migration0060],
+  [59, "McpAppModelContext", Migration0059],
+  [60, "ThreadSnapshotWindowIndexes", Migration0060],
+  [61, "ProjectionThreadIssues", Migration0061],
+  [62, "WorkItemLinks", Migration0062],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

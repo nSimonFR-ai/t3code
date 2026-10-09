@@ -65,8 +65,10 @@ function bitbucketIssueErrorReason(
   error: BitbucketIssueApi.BitbucketIssueApiError,
   operation: string,
 ): IssueProviderError["reason"] {
-  if (error._tag !== "BitbucketResponseError") return "failed";
+  if (error._tag !== "BitbucketResponseError" && error._tag !== "BitbucketResponseBodyReadError")
+    return "failed";
   if (error.status === 401) return "unauthenticated";
+  if (error.status === 429) return "rate-limited";
   // A switched-off tracker answers 404 on the issues collection itself — `listIssues` and
   // `create` are the only operations that ask it directly. A 404 on one issue by number means
   // only that issue is gone, which is an ordinary failure the reader can act on.
@@ -102,6 +104,12 @@ export const make = Effect.gen(function* () {
       provider: "bitbucket",
       operation,
       reason: bitbucketIssueErrorReason(error, operation),
+      ...((error._tag === "BitbucketResponseError" ||
+        error._tag === "BitbucketResponseBodyReadError") &&
+      error.status === 429 &&
+      error.retryAt !== undefined
+        ? { retryAt: error.retryAt }
+        : {}),
       // Every Bitbucket failure states its own fact; this names the operation around it, so the
       // two do not stack into "failed in x: failed in y: ...".
       detail: error.detail,
@@ -152,7 +160,13 @@ export const make = Effect.gen(function* () {
           api.getIssue(target),
           api
             .getRepositoryPermission({ repository: input.repository })
-            .pipe(Effect.orElseSucceed(() => false)),
+            .pipe(
+              Effect.catch((error) =>
+                bitbucketIssueErrorReason(error, "getRepositoryPermission") === "rate-limited"
+                  ? Effect.fail(error)
+                  : Effect.succeed(false),
+              ),
+            ),
         ],
         { concurrency: 2 },
       ).pipe(

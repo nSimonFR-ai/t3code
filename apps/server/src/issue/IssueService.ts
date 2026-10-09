@@ -11,6 +11,7 @@ import * as Stream from "effect/Stream";
 import * as Scope from "effect/Scope";
 import {
   IssueOperationError,
+  ISSUE_LIST_CURSOR_MAX_LENGTH,
   IssueUnavailableError,
   issueProjectSourceKey,
   issueRepositoryKey,
@@ -54,11 +55,13 @@ import {
 } from "@t3tools/contracts";
 
 import { AllowGitHubReserve } from "../sourceControl/GitHubApi.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import {
   issueProviderContextKey,
-  type IssueProviderError,
+  IssueProviderError,
+  type IssueAdapter,
   type ProviderIssue,
   type ProviderListCursor,
 } from "./IssueProvider.ts";
@@ -201,6 +204,7 @@ interface RepositoryBatch {
   readonly errors: ReadonlyArray<IssueListProjectError>;
   readonly truncated: boolean;
   readonly nextCursor: string | null;
+  readonly cursorLimitReached?: boolean;
 }
 
 /** What the providers are told, plus the part only the service acts on. */
@@ -277,10 +281,10 @@ function nextListCursor(
   previous: ListCursor | undefined,
   /** What the host handed over, before the rows already sent were dropped from it. */
   fetched: ReadonlyArray<ProviderIssue>,
-): string | null {
+) {
   // The host had nothing at all, so there is no row to carry on from — and repeating the cursor
   // that produced the empty slice would ask the same question forever.
-  if (fetched.length === 0) return null;
+  if (fetched.length === 0) return { cursor: null, limitReached: false };
   // Taken from what the host answered rather than from what survived de-duplication: a slice can
   // be entirely rows already sent — a hundred issues touched in the same second is one triage
   // afternoon — and reading "nothing new" as "nothing left" would end the walk on the instant it
@@ -301,7 +305,7 @@ function listCursorAt(
   boundary: string,
   /** This repository's own rows in the slice, before the ones already sent were dropped. */
   fetched: ReadonlyArray<ProviderIssue>,
-): string {
+) {
   // De-duplicated because the boundary instant is asked for inclusively: the rows already named
   // here come back with the next slice and would otherwise be named a second time, growing the
   // cursor by one number per round trip until it outgrows what the page may send back.
@@ -311,7 +315,9 @@ function listCursorAt(
       ...fetched.filter((item) => item.updatedAt === boundary).map((item) => item.number),
     ]),
   ];
-  return `${boundary}|${RETIRED_DELIVERED_COUNT}|${seenAt.join(",")}`;
+  const cursor = `${boundary}|${RETIRED_DELIVERED_COUNT}|${seenAt.join(",")}`;
+  const limitReached = cursor.length > ISSUE_LIST_CURSOR_MAX_LENGTH;
+  return { cursor: limitReached ? null : cursor, limitReached };
 }
 
 /**
@@ -381,10 +387,87 @@ const CredentialNamespace = Context.Reference<string>("t3/issue/CredentialNamesp
   defaultValue: () => "",
 });
 
+function withRateLimitBackoff(
+  api: IssueAdapter,
+  host: string,
+  limits: SourceControlRateLimit.SourceControlRateLimit["Service"],
+  credentialId?: string,
+): IssueAdapter {
+  if (api.kind === "github" || api.kind === "linear") return api;
+  const key = { provider: api.kind, host };
+  const wrap =
+    <I, A>(operation: string, call: (input: I) => Effect.Effect<A, IssueProviderError>) =>
+    (input: I) =>
+      Effect.gen(function* () {
+        const scope = yield* SourceControlRateLimit.CredentialScope;
+        const credential =
+          scope ||
+          credentialId ||
+          (api.withCredential === undefined ? "" : yield* CredentialNamespace);
+        return yield* limits.check(key).pipe(
+          Effect.mapError(
+            (error) =>
+              new IssueProviderError({
+                provider: api.kind,
+                operation,
+                reason: "rate-limited",
+                detail: error.detail,
+                retryAt: error.retryAt,
+                cause: error,
+              }),
+          ),
+          Effect.flatMap((lease) =>
+            Effect.suspend(() => call(input)).pipe(
+              Effect.tap(() => limits.recordSuccess({ ...key, lease })),
+              Effect.tapError((error) =>
+                error.reason === "rate-limited"
+                  ? limits.recordRateLimit({ ...key, lease, retryAt: error.retryAt })
+                  : Effect.void,
+              ),
+            ),
+          ),
+          Effect.provideService(SourceControlRateLimit.CredentialScope, credential),
+        );
+      });
+  return {
+    ...api,
+    getViewer: wrap("getViewer", api.getViewer),
+    listIssues: wrap("listIssues", api.listIssues),
+    ...(api.listIssuesAcross === undefined
+      ? {}
+      : { listIssuesAcross: wrap("listIssuesAcross", api.listIssuesAcross) }),
+    ...(api.getIssueSummary === undefined
+      ? {}
+      : { getIssueSummary: wrap("getIssueSummary", api.getIssueSummary) }),
+    getIssue: wrap("getIssue", api.getIssue),
+    getIssueActivity: wrap("getIssueActivity", api.getIssueActivity),
+    ...(api.getIssueComments === undefined
+      ? {}
+      : { getIssueComments: wrap("getIssueComments", api.getIssueComments) }),
+    getViewerPermissions: wrap("getViewerPermissions", api.getViewerPermissions),
+    runAction: wrap("runAction", api.runAction),
+    comment: wrap("comment", api.comment),
+    ...(api.updateComment === undefined
+      ? {}
+      : { updateComment: wrap("updateComment", api.updateComment) }),
+    ...(api.setReaction === undefined ? {} : { setReaction: wrap("setReaction", api.setReaction) }),
+    create: wrap("create", api.create),
+    update: wrap("update", api.update),
+    setLabels: wrap("setLabels", api.setLabels),
+    setAssignees: wrap("setAssignees", api.setAssignees),
+    listLabelCandidates: wrap("listLabelCandidates", api.listLabelCandidates),
+    listAssigneeCandidates: wrap("listAssigneeCandidates", api.listAssigneeCandidates),
+    ...(api.listIssueTemplates === undefined
+      ? {}
+      : { listIssueTemplates: wrap("listIssueTemplates", api.listIssueTemplates) }),
+  };
+}
+
 export const make = Effect.gen(function* () {
   const registry = yield* IssueProviderRegistry.IssueProviderRegistry;
   const projects = yield* ProjectService.ProjectService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+  const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const refreshes = yield* PubSub.unbounded<IssueRef>();
 
   const listWorkspaceProjects = (
@@ -415,6 +498,18 @@ export const make = Effect.gen(function* () {
           ),
         ),
         Effect.flatMap((shells) => registry.resolveProjects(shells, filter)),
+        Effect.map((resolved) => ({
+          ...resolved,
+          supported: resolved.supported.map((project) => ({
+            ...project,
+            adapter: withRateLimitBackoff(
+              project.adapter,
+              project.host,
+              rateLimits,
+              project.credentialId,
+            ),
+          })),
+        })),
       );
     });
 
@@ -559,16 +654,18 @@ export const make = Effect.gen(function* () {
         new Map(projects.map((project) => [sourceKeyOf(project), project])),
         ([key, first]) =>
           Effect.flatMap(Clock.currentTimeMillis, (now): Effect.Effect<ResolvedViewer> => {
+            const forSource = projects.filter((project) => sourceKeyOf(project) === key);
+            const projectIds = forSource.map(({ project }) => project.id);
             const held = viewersBySource.get(`${key}\0${credentialNamespace}`);
             if (held !== undefined && now - held.at <= Duration.toMillis(VIEWER_CACHE_TTL)) {
-              return Effect.succeed(held.result);
+              return Effect.succeed({ ...held.result, projectIds });
             }
-            const forSource = projects.filter((project) => sourceKeyOf(project) === key);
             const adapter = first.adapter;
             // Every checkout on the host, not just the ones that survived de-duplication: one
             // unreadable worktree would otherwise report the whole host as signed out.
             const roots =
               viewerRoots.get(key) ?? forSource.map(({ project }) => project.workspaceRoot);
+            const epoch = listingsEpoch;
             return Effect.firstSuccessOf(
               roots.map((cwd) =>
                 sourceRead(
@@ -581,21 +678,23 @@ export const make = Effect.gen(function* () {
                 key,
                 host: first.host,
                 kind: adapter.kind,
-                projectIds: forSource.map(({ project }) => project.id),
+                projectIds,
                 viewer: viewer as string | null,
                 error: null as IssueProviderError | null,
               })),
               Effect.tap((result) =>
-                Effect.map(Clock.currentTimeMillis, (at) =>
-                  viewersBySource.set(`${key}\0${credentialNamespace}`, { at, result }),
-                ),
+                Effect.map(Clock.currentTimeMillis, (at) => {
+                  if (epoch === listingsEpoch) {
+                    viewersBySource.set(`${key}\0${credentialNamespace}`, { at, result });
+                  }
+                }),
               ),
               Effect.catch((error) =>
                 Effect.succeed({
                   key,
                   host: first.host,
                   kind: adapter.kind,
-                  projectIds: forSource.map(({ project }) => project.id),
+                  projectIds,
                   viewer: null,
                   error,
                 }),
@@ -854,16 +953,18 @@ export const make = Effect.gen(function* () {
                       item.updatedAt !== cursor.updatedBefore ||
                       !cursor.seenAt.includes(item.number),
                   );
+            const continuation =
+              sort === "updated" && order === "desc" && page.continues && page.truncated
+                ? nextListCursor(cursor, page.items)
+                : null;
             return {
               projectId: project.project.id,
               key,
               entries: items.map((item) => toEntry({ project, item })),
               errors: [],
               truncated: page.truncated,
-              nextCursor:
-                sort === "updated" && order === "desc" && page.continues && page.truncated
-                  ? nextListCursor(cursor, page.items)
-                  : null,
+              nextCursor: continuation?.cursor ?? null,
+              ...(continuation?.limitReached ? { cursorLimitReached: true } : {}),
             };
           }),
           // One unreadable repository must not blank the page — including the one whose tracker
@@ -915,7 +1016,19 @@ export const make = Effect.gen(function* () {
             sort,
             order,
             query: input.query,
-            ...(cursor === undefined ? {} : { cursor: { updatedBefore: cursor.updatedBefore } }),
+            ...(cursor === undefined
+              ? {}
+              : {
+                  cursor: {
+                    updatedBefore: cursor.updatedBefore,
+                    seenAtByRepository: Object.fromEntries(
+                      chunk.map((project) => [
+                        project.repository.toLowerCase(),
+                        cursorOf(project)?.seenAt ?? [],
+                      ]),
+                    ),
+                  },
+                }),
           }),
         ).pipe(
           Effect.flatMap((page) => {
@@ -955,16 +1068,22 @@ export const make = Effect.gen(function* () {
                           item.updatedAt !== cursorHere.updatedBefore ||
                           !cursorHere.seenAt.includes(item.number),
                       );
+                const continuation =
+                  sort === "updated" &&
+                  order === "desc" &&
+                  page.truncated &&
+                  !page.ceilingReached &&
+                  boundary !== null
+                    ? listCursorAt(cursorHere, boundary, fetched)
+                    : null;
                 return Effect.succeed({
                   projectId: project.project.id,
                   key: listCursorKey(project),
                   entries: items.map((item) => toEntry({ project, item })),
                   errors: [],
-                  truncated: page.truncated,
-                  nextCursor:
-                    sort === "updated" && order === "desc" && page.truncated && boundary !== null
-                      ? listCursorAt(cursorHere, boundary, fetched)
-                      : null,
+                  truncated: page.truncated || page.ceilingReached === true,
+                  nextCursor: continuation?.cursor ?? null,
+                  ...(continuation?.limitReached ? { cursorLimitReached: true } : {}),
                 });
               },
               { concurrency: REPOSITORY_CONCURRENCY },
@@ -1021,6 +1140,7 @@ export const make = Effect.gen(function* () {
         errors,
         truncated: batches.some((batch) => batch.truncated),
         nextCursors,
+        ...(batches.some((batch) => batch.cursorLimitReached) ? { cursorLimitReached: true } : {}),
       };
     });
 
@@ -1598,7 +1718,8 @@ export const make = Effect.gen(function* () {
   let templatesEpoch = 0;
   const refEpochs = new Map<string, number>();
   const REF_EPOCH_CAPACITY = 2_048;
-  const refScope = (ref: IssueRef) => `${ref.projectId} ${ref.repository} ${ref.number}`;
+  const refScope = (ref: IssueRef) =>
+    `${ref.projectId} ${ref.repository.trim().toLowerCase()} ${ref.number}`;
   const refEpoch = (ref: IssueRef) => refEpochs.get(refScope(ref)) ?? allRefsEpoch;
   const bumpRefEpoch = (ref: IssueRef) => {
     const scope = refScope(ref);
@@ -1864,6 +1985,7 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((project) =>
           project.adapter.withCredential === undefined
             ? read(input).pipe(
+                Effect.provideService(CredentialNamespace, sourceKeyOf(project)),
                 Effect.provideService(ResolvedSource, project),
                 Effect.provideService(AllowGitHubReserve, allowReserve),
               )
@@ -1900,7 +2022,7 @@ export const make = Effect.gen(function* () {
                 key: sourceKeyOf(project),
                 fingerprint,
                 context,
-              })),
+              })).pipe(Effect.provideService(CredentialNamespace, fingerprint)),
             ).pipe(
               Effect.match({
                 onSuccess: (scope) => scope,
@@ -1917,7 +2039,14 @@ export const make = Effect.gen(function* () {
             list(input).pipe(
               Effect.provideService(
                 CredentialNamespace,
-                encodeCacheKey(scopes.map(({ key, fingerprint }) => [key, fingerprint])),
+                encodeCacheKey([
+                  ...scopes.map(({ key, fingerprint }) => [key, fingerprint]),
+                  ...new Set(
+                    resolved.supported
+                      .filter((project) => project.adapter.withCredential === undefined)
+                      .map(sourceKeyOf),
+                  ),
+                ]),
               ),
               Effect.provideService(
                 CredentialContexts,
@@ -1938,21 +2067,24 @@ export const make = Effect.gen(function* () {
     trackerStatus: (input) =>
       registry.tracker(input.provider, "status").pipe(Effect.flatMap((tracker) => tracker.status)),
     trackerConnect: (input) =>
-      registry
-        .tracker(input.provider, "connect")
-        .pipe(Effect.flatMap((tracker) => tracker.connect(input.token))),
+      registry.tracker(input.provider, "connect").pipe(
+        Effect.flatMap((tracker) => tracker.connect(input.token)),
+        Effect.tap(() => invalidate({})),
+      ),
     trackerDisconnect: (input) =>
-      registry
-        .tracker(input.provider, "disconnect")
-        .pipe(Effect.flatMap((tracker) => tracker.disconnect(input.credentialId))),
+      registry.tracker(input.provider, "disconnect").pipe(
+        Effect.flatMap((tracker) => tracker.disconnect(input.credentialId)),
+        Effect.tap(() => invalidate({})),
+      ),
     trackerBind: (input) =>
-      registry
-        .tracker(input.provider, "bind")
-        .pipe(Effect.flatMap((tracker) => tracker.bind(input))),
+      registry.tracker(input.provider, "bind").pipe(
+        Effect.flatMap((tracker) => tracker.bind(input)),
+        Effect.tap(() => invalidate({})),
+      ),
     list: credentialList,
     summary: credentialScoped(summary, false),
-    detail: credentialScoped(detail),
-    activity: credentialScoped(activity),
+    detail: credentialScoped(detail, false),
+    activity: credentialScoped(activity, false),
     runAction: (input) =>
       credentialScoped(invalidatedByMutation(runAction))(input).pipe(
         Effect.tap(() => PubSub.publish(refreshes, input)),

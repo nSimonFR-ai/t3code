@@ -6,11 +6,16 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
+import * as Schema from "effect/Schema";
+import * as Redacted from "effect/Redacted";
 import {
   issueProjectSourceKey,
   issueSourceKey,
+  IssueListInput,
+  IssueListResult,
   type IssueCapabilities,
   type IssueTemplateList,
   type IssueProviderKind,
@@ -29,8 +34,23 @@ import {
   type ProviderIssue,
   type ProviderIssueDetail,
   type IssueAdapter,
+  type ProviderListCursor,
 } from "./IssueProvider.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import { AllowGitHubReserve } from "../sourceControl/GitHubApi.ts";
+import * as GitHubApi from "../sourceControl/GitHubApi.ts";
+import * as GitHubIssueCli from "./GitHubIssueCli.ts";
+import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as PullRequestProviderRegistry from "../pullRequest/PullRequestProviderRegistry.ts";
+import { PullRequestProviderError } from "../pullRequest/PullRequestProvider.ts";
+import * as PullRequestReadCache from "../pullRequest/PullRequestReadCache.ts";
+import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as GitLabCli from "../sourceControl/GitLabCli.ts";
+import * as GitLabIssueCli from "./GitLabIssueCli.ts";
+import * as GitLabIssueProvider from "./GitLabIssueProvider.ts";
 import { IssueProviderRegistry, fromProviders } from "./IssueProviderRegistry.ts";
 import * as IssueService from "./IssueService.ts";
 
@@ -177,11 +197,15 @@ function fakeProvider(
 function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<IssueAdapter>;
+  readonly rateLimits?: SourceControlRateLimit.SourceControlRateLimit["Service"];
   readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
 }) {
   return IssueService.make.pipe(
     Effect.provide(
       Layer.mergeAll(
+        input.rateLimits === undefined
+          ? SourceControlRateLimit.layer
+          : Layer.succeed(SourceControlRateLimit.SourceControlRateLimit, input.rateLimits),
         Layer.effect(IssueProviderRegistry, fromProviders(input.providers)).pipe(
           Layer.provide(
             Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
@@ -210,6 +234,376 @@ const REFERENCE = { projectId: "p1" as ProjectId, repository: "acme/web", number
 const ONE_PROJECT = [
   project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
 ];
+
+it.effect.each(["gitlab", "azure-devops", "bitbucket", "jira"] as const)(
+  "shares %s cooldown across reads and writes while keeping cached answers",
+  (kind) =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(0);
+      const calls = { detail: 0, activity: 0, viewer: 0, list: 0, write: 0 };
+      let limited = true;
+      const provider = fakeProvider(kind, {
+        getIssue: ({ number }) => {
+          calls.detail++;
+          return limited && number === 8
+            ? Effect.fail(
+                new IssueProviderError({
+                  provider: kind,
+                  operation: "getIssue",
+                  reason: "rate-limited",
+                  detail: "Quota exhausted.",
+                  retryAt: 60_000,
+                }),
+              )
+            : Effect.succeed(issueDetail(number, { viewer: "bilal" }));
+        },
+        getIssueActivity: () => {
+          calls.activity++;
+          return Effect.succeed({
+            comments: [],
+            commentCount: 0,
+            commentsTruncated: false,
+            events: [],
+          });
+        },
+        getViewer: () => {
+          calls.viewer++;
+          return Effect.succeed("bilal");
+        },
+        listIssues: () => {
+          calls.list++;
+          return Effect.succeed({ items: [], truncated: false, continues: false });
+        },
+        create: () => {
+          calls.write++;
+          return Effect.succeed({ number: 9, url: "https://host/issues/9" });
+        },
+      });
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "p1",
+            title: "web",
+            workspaceRoot: "/a",
+            repository: REFERENCE.repository,
+            provider: kind,
+            host: "tracker.test",
+          }),
+        ],
+        providers: [provider],
+      });
+      const detail = yield* service.detail(REFERENCE);
+      const activity = yield* service.activity(REFERENCE);
+      const list = yield* service.list({ state: "open" });
+      const failed = yield* service.detail({ ...REFERENCE, number: 8 }).pipe(Effect.flip);
+      assert.instanceOf(failed.cause, IssueProviderError);
+      assert.equal((failed.cause as IssueProviderError).retryAt, 60_000);
+      assert.deepEqual(yield* service.detail(REFERENCE), detail);
+      assert.deepEqual(yield* service.activity(REFERENCE), activity);
+      assert.deepEqual(yield* service.list({ state: "open" }), list);
+      for (const read of [
+        service.detail({ ...REFERENCE, number: 9 }).pipe(Effect.asVoid),
+        service.activity({ ...REFERENCE, number: 9 }).pipe(Effect.asVoid),
+        service.summary({ ...REFERENCE, number: 9 }).pipe(Effect.asVoid),
+      ]) {
+        const error = yield* read.pipe(Effect.flip);
+        assert.instanceOf(error.cause, IssueProviderError);
+        assert.equal((error.cause as IssueProviderError).reason, "rate-limited");
+        assert.equal((error.cause as IssueProviderError).retryAt, 60_000);
+      }
+      const blockedList = yield* service.list({ state: "closed" });
+      assert.equal(blockedList.errors.length, 1);
+      yield* service
+        .create({ ...REFERENCE, title: "New issue", body: "", labels: [], assignees: [] })
+        .pipe(Effect.flip);
+      yield* TestClock.adjust("16 seconds");
+      assert.deepEqual(yield* service.activity({ ...REFERENCE, number: 7 }), activity);
+      yield* service.invalidate({ reference: REFERENCE });
+      yield* service.detail(REFERENCE).pipe(Effect.flip);
+      yield* service.invalidate({});
+      const blockedViewer = yield* service.list({ state: "open" }).pipe(Effect.flip);
+      assert.equal((blockedViewer.cause as IssueProviderError).operation, "getViewer");
+      assert.deepEqual(calls, { detail: 2, activity: 1, viewer: 1, list: 1, write: 0 });
+      yield* TestClock.adjust("44 seconds");
+      limited = false;
+      assert.equal((yield* service.detail({ ...REFERENCE, number: 8 })).number, 8);
+      yield* service.list({ state: "open" });
+      assert.deepEqual(calls, { detail: 3, activity: 1, viewer: 2, list: 2, write: 0 });
+    }),
+);
+
+it.effect("isolates custom issue cooldowns by host and saved credential", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const service = yield* makeService({
+      projects: ["p1", "p2", "p3"].map((id) => project({ id, title: id, workspaceRoot: `/${id}` })),
+      providers: [
+        fakeProvider("jira", {
+          resolveSource: ({ id }) =>
+            Effect.succeed({
+              host: id === "p3" ? "other.test" : "jira.test",
+              repository: "ENG",
+              credentialId: id === "p2" ? "second" : "first",
+            }),
+          getIssue: ({ host, credentialId }) => {
+            calls.push(`${host}:${credentialId}`);
+            return host === "jira.test" && credentialId === "first"
+              ? Effect.fail(
+                  new IssueProviderError({
+                    provider: "jira",
+                    operation: "getIssue",
+                    reason: "rate-limited",
+                    detail: "Quota exhausted.",
+                  }),
+                )
+              : Effect.succeed(issueDetail(7, { viewer: "bilal" }));
+          },
+        }),
+      ],
+    });
+    const ref = { ...REFERENCE, repository: "ENG", provider: "jira" };
+    yield* service.detail(ref).pipe(Effect.flip);
+    yield* service.detail({ ...ref, projectId: "p2" as ProjectId });
+    yield* service.detail({ ...ref, projectId: "p3" as ProjectId });
+    yield* service.activity(ref).pipe(Effect.flip);
+    assert.deepEqual(calls, ["jira.test:first", "jira.test:second", "other.test:first"]);
+  }),
+);
+
+it.effect("shares cooldowns in both directions with the pull request service", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(0);
+    const limits = yield* SourceControlRateLimit.make;
+    const shells = [
+      project({
+        id: "p1",
+        title: "web",
+        workspaceRoot: "/a",
+        provider: "gitlab",
+        repository: REFERENCE.repository,
+      }),
+    ];
+    const calls = { issue: 0, pr: 0 };
+    const issues = yield* makeService({
+      projects: shells,
+      rateLimits: limits,
+      providers: [
+        fakeProvider("gitlab", {
+          getIssue: () => {
+            calls.issue++;
+            return Effect.fail(
+              new IssueProviderError({
+                provider: "gitlab",
+                operation: "getIssue",
+                reason: "rate-limited",
+                detail: "Quota exhausted.",
+              }),
+            );
+          },
+        }),
+      ],
+    });
+    const unused = () => Effect.die("unused");
+    const prs = yield* PullRequestService.make.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(SourceControlRateLimit.SourceControlRateLimit, limits),
+          Layer.mock(ProjectService.ProjectService)({
+            listShells: () => Effect.succeed(shells),
+            getShell: () => Effect.succeedSome(shells[0]!),
+          }),
+          Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+          Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+            resolveLink: unused,
+          }),
+          Layer.mock(ServerSettings.ServerSettingsService)({}),
+          Layer.mock(PullRequestFilesViewed.PullRequestFilesViewedRepository)({}),
+          Layer.mock(PullRequestReadCache.PullRequestReadCache)({ get: (_key, read) => read }),
+          Layer.mock(PullRequestProviderRegistry.PullRequestProviderRegistry)({
+            kinds: ["gitlab"],
+            get: () => ({
+              kind: "gitlab",
+              capabilities: {
+                diff: false,
+                comment: false,
+                actions: [],
+                mergeMethods: [],
+                search: false,
+                review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
+                reviewers: { request: false, listCandidates: false },
+              },
+              getViewer: unused,
+              listChangeRequests: unused,
+              getChangeRequest: () =>
+                Effect.suspend(() => {
+                  calls.pr++;
+                  return Effect.fail(
+                    new PullRequestProviderError({
+                      provider: "gitlab",
+                      operation: "getChangeRequest",
+                      reason: "rate-limited",
+                      detail: "Quota exhausted.",
+                    }),
+                  );
+                }),
+              getChangeRequestActivity: unused,
+              getViewerPermissions: unused,
+              getDiff: unused,
+              runAction: unused,
+              comment: unused,
+              submitReview: unused,
+              listReviewerCandidates: unused,
+              setReviewerRequest: unused,
+              replyToThread: unused,
+              setReaction: unused,
+              setThreadResolution: unused,
+            }),
+          }),
+        ),
+      ),
+    );
+    yield* prs.summary(REFERENCE).pipe(Effect.flip);
+    assert.deepEqual(calls, { issue: 0, pr: 1 });
+    const sharedPause = yield* limits
+      .check({ provider: "gitlab", host: "gitlab.com" })
+      .pipe(Effect.flip);
+    const issuePause = yield* issues.detail(REFERENCE).pipe(Effect.flip);
+    assert.equal((issuePause.cause as IssueProviderError).retryAt, sharedPause.retryAt);
+    assert.deepEqual(calls, { issue: 0, pr: 1 });
+    yield* TestClock.setTime(sharedPause.retryAt);
+    yield* issues.detail(REFERENCE).pipe(Effect.flip);
+    const nextPause = yield* limits
+      .check({ provider: "gitlab", host: "gitlab.com" })
+      .pipe(Effect.flip);
+    const prPause = yield* prs.summary({ ...REFERENCE, number: 8 }).pipe(Effect.flip);
+    assert.equal((prPause.cause as PullRequestProviderError).retryAt, nextPause.retryAt);
+    assert.isAbove(nextPause.retryAt, sharedPause.retryAt);
+    assert.deepEqual(calls, { issue: 1, pr: 1 });
+  }),
+);
+
+it.effect("records a rate-limited issue write and blocks later reads", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("jira", {
+          resolveSource: () =>
+            Effect.succeed({ host: "jira.test", repository: REFERENCE.repository }),
+          updateComment: () => {
+            calls.push("write");
+            return Effect.fail(
+              new IssueProviderError({
+                provider: "jira",
+                operation: "updateComment",
+                reason: "rate-limited",
+                detail: "Quota exhausted.",
+              }),
+            );
+          },
+          getIssue: () => {
+            calls.push("read");
+            return Effect.succeed(issueDetail(7));
+          },
+        }),
+      ],
+    });
+    const ref = { ...REFERENCE, provider: "jira" };
+    yield* service.updateComment({ ...ref, commentId: "1", body: "Updated" }).pipe(Effect.flip);
+    yield* service.detail(ref).pipe(Effect.flip);
+    yield* service.updateComment({ ...ref, commentId: "2", body: "Updated" }).pipe(Effect.flip);
+    assert.deepEqual(calls, ["write"]);
+  }),
+);
+
+it.effect("pins custom adapter cooldowns to each verified credential in list reads", () =>
+  Effect.gen(function* () {
+    let fingerprint = "first";
+    const calls: string[] = [];
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a" })],
+      providers: [
+        fakeProvider("jira", {
+          resolveSource: () => Effect.succeed({ host: "jira.test", repository: "ENG" }),
+          withCredential: (_host, read) => read(fingerprint),
+          getIssue: () => {
+            calls.push(`detail:${fingerprint}`);
+            return fingerprint === "first"
+              ? Effect.fail(
+                  new IssueProviderError({
+                    provider: "jira",
+                    operation: "getIssue",
+                    reason: "rate-limited",
+                    detail: "Quota exhausted.",
+                  }),
+                )
+              : Effect.succeed(issueDetail(7, { viewer: "bilal" }));
+          },
+          getViewer: () => {
+            calls.push(`viewer:${fingerprint}`);
+            return Effect.succeed("bilal");
+          },
+          listIssues: () => {
+            calls.push(`list:${fingerprint}`);
+            return Effect.succeed({ items: [], truncated: false, continues: false });
+          },
+        }),
+      ],
+    });
+    const ref = { ...REFERENCE, repository: "ENG", provider: "jira" };
+    yield* service.detail(ref).pipe(Effect.flip);
+    yield* service.list({ state: "open" }).pipe(Effect.flip);
+    fingerprint = "second";
+    yield* service.detail(ref);
+    yield* service.list({ state: "open" });
+    fingerprint = "first";
+    yield* service.detail({ ...ref, number: 8 }).pipe(Effect.flip);
+    yield* service.list({ state: "closed" }).pipe(Effect.flip);
+    assert.deepEqual(calls, ["detail:first", "detail:second", "viewer:second", "list:second"]);
+  }),
+);
+
+it.effect("keeps a concurrent issue success from clearing an active cooldown", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let calls = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("jira", {
+          resolveSource: () =>
+            Effect.succeed({ host: "jira.test", repository: REFERENCE.repository }),
+          getIssue: ({ number }) => {
+            calls++;
+            return number === 7
+              ? Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.as(issueDetail(7, { viewer: "bilal" })),
+                )
+              : Effect.fail(
+                  new IssueProviderError({
+                    provider: "jira",
+                    operation: "getIssue",
+                    reason: "rate-limited",
+                    detail: "Quota exhausted.",
+                  }),
+                );
+          },
+        }),
+      ],
+    });
+    const ref = { ...REFERENCE, provider: "jira" };
+    const pending = yield* service.detail(ref).pipe(Effect.forkChild());
+    yield* Deferred.await(started);
+    yield* service.detail({ ...ref, number: 8 }).pipe(Effect.flip);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(pending);
+    yield* service.detail({ ...ref, number: 9 }).pipe(Effect.flip);
+    assert.equal(calls, 2);
+  }),
+);
 
 it.effect("routes tracker operations through the requested adapter and preserves failures", () =>
   Effect.gen(function* () {
@@ -570,6 +964,147 @@ it.effect("keeps the earlier exclusions when a slice ends on the instant it bega
   }),
 );
 
+it.effect.each([
+  ["repository", 600, 100_000],
+  ["grouped", 600, 100_000],
+  ["repository", 1000, 100_000_000],
+  ["grouped", 1000, 100_000_000],
+] as const)("round-trips a large %s continuation with %i tied issues", ([mode, count, start]) =>
+  Effect.gen(function* () {
+    const boundary = "2026-07-02T00:00:00Z";
+    const numbers = Array.from({ length: count }, (_, index) => start + index);
+    const rows = numbers.map((number) => batchedIssue(number, "acme/web", boundary));
+    let calls = 0;
+    const read = (cursor: ProviderListCursor | undefined) => {
+      calls++;
+      if (calls === 1) {
+        assert.isUndefined(cursor);
+        return Effect.succeed({ items: rows, truncated: true, continues: true });
+      }
+      assert.strictEqual(cursor?.updatedBefore, boundary);
+      assert.deepStrictEqual(
+        mode === "grouped" ? cursor?.seenAtByRepository?.["acme/web"] : cursor?.seenAt,
+        calls === 2 ? numbers : [...numbers, start + count],
+      );
+      return Effect.succeed({
+        items: [
+          rows[0]!,
+          batchedIssue(start + count, "acme/web", boundary),
+          ...(calls === 2
+            ? []
+            : [batchedIssue(start + count + 1, "acme/web", "2026-07-01T00:00:00Z")]),
+        ],
+        truncated: true,
+        continues: true,
+      });
+    };
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          listIssues: ({ cursor }) => read(cursor),
+          ...(mode === "grouped" ? { listIssuesAcross: ({ cursor }) => read(cursor) } : {}),
+        }),
+      ],
+    });
+    const outputCodec = Schema.toCodecJson(IssueListResult);
+    const result = yield* service.list({ state: "open", limit: 99 });
+    assert.isAbove(result.nextCursors[cursorKey("acme/web")]!.length, 4096);
+    const first = yield* Schema.decodeUnknownEffect(outputCodec)(
+      yield* Schema.encodeUnknownEffect(outputCodec)(result),
+    );
+    assert.deepStrictEqual(first, result);
+    assert.isUndefined(first.cursorLimitReached);
+    assert.deepStrictEqual(first.entries.map((entry) => entry.number).toSorted(), numbers);
+    const inputCodec = Schema.toCodecJson(IssueListInput);
+    const input = yield* Schema.decodeUnknownEffect(inputCodec)(
+      yield* Schema.encodeUnknownEffect(inputCodec)({
+        state: "open",
+        limit: 99,
+        cursors: first.nextCursors,
+      }),
+    );
+    const second = yield* Schema.decodeUnknownEffect(outputCodec)(
+      yield* Schema.encodeUnknownEffect(outputCodec)(yield* service.list(input)),
+    );
+    assert.deepStrictEqual(
+      second.entries.map((entry) => entry.number),
+      [start + count],
+    );
+    assert.deepStrictEqual(second.nextCursors, {
+      [cursorKey("acme/web")]: `${boundary}|0|${[...numbers, start + count].join(",")}`,
+    });
+    const continuation = yield* Schema.decodeUnknownEffect(inputCodec)(
+      yield* Schema.encodeUnknownEffect(inputCodec)({
+        state: "open",
+        limit: 99,
+        cursors: second.nextCursors,
+      }),
+    );
+    const third = yield* Schema.decodeUnknownEffect(outputCodec)(
+      yield* Schema.encodeUnknownEffect(outputCodec)(yield* service.list(continuation)),
+    );
+    assert.deepStrictEqual(
+      third.entries.map((entry) => entry.number),
+      [start + count + 1],
+    );
+    assert.deepStrictEqual(third.nextCursors, {
+      [cursorKey("acme/web")]: `2026-07-01T00:00:00Z|0|${start + count + 1}`,
+    });
+    assert.strictEqual(calls, 3);
+  }),
+);
+
+it.effect.each(["repository", "grouped"] as const)(
+  "reports a truncated %s page when its complete continuation exceeds the wire bound",
+  (mode) =>
+    Effect.gen(function* () {
+      const boundary = "2026-07-02T00:00:00Z";
+      const numbers = Array.from({ length: 1636 }, (_, index) => 100_000_000 + index);
+      const read = (cursor: ProviderListCursor | undefined) => {
+        assert.deepStrictEqual(
+          mode === "grouped" ? cursor?.seenAtByRepository?.["acme/web"] : cursor?.seenAt,
+          numbers,
+        );
+        return Effect.succeed({
+          items: [
+            batchedIssue(numbers[0]!, "acme/web", boundary),
+            batchedIssue(200_000_000, "acme/web", boundary),
+          ],
+          truncated: true,
+          continues: true,
+        });
+      };
+      const service = yield* makeService({
+        projects: ONE_PROJECT,
+        providers: [
+          fakeProvider("github", {
+            listIssues: ({ cursor }) => read(cursor),
+            ...(mode === "grouped" ? { listIssuesAcross: ({ cursor }) => read(cursor) } : {}),
+          }),
+        ],
+      });
+      const inputCodec = Schema.toCodecJson(IssueListInput);
+      const input = yield* Schema.decodeUnknownEffect(inputCodec)(
+        yield* Schema.encodeUnknownEffect(inputCodec)({
+          state: "open",
+          cursors: { [cursorKey("acme/web")]: `${boundary}|0|${numbers.join(",")}` },
+        }),
+      );
+      const outputCodec = Schema.toCodecJson(IssueListResult);
+      const result = yield* Schema.decodeUnknownEffect(outputCodec)(
+        yield* Schema.encodeUnknownEffect(outputCodec)(yield* service.list(input)),
+      );
+      assert.deepStrictEqual(
+        result.entries.map((entry) => entry.number),
+        [200_000_000],
+      );
+      assert.isTrue(result.truncated);
+      assert.isTrue(result.cursorLimitReached);
+      assert.deepStrictEqual(result.nextCursors, {});
+    }),
+);
+
 it.effect("carries on from a slice that was nothing but rows it had already sent", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
@@ -597,6 +1132,63 @@ it.effect("carries on from a slice that was nothing but rows it had already sent
     assert.deepStrictEqual(result.nextCursors, {
       [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|0|7",
     });
+  }),
+);
+
+it.effect("keeps other repositories paging when one complete cursor exceeds its bound", () =>
+  Effect.gen(function* () {
+    const boundary = "2026-07-02T00:00:00Z";
+    const numbers = Array.from({ length: 1636 }, (_, index) => 100_000_000 + index);
+    let calls = 0;
+    const service = yield* makeService({
+      projects: TWO_PROJECTS,
+      providers: [
+        fakeProvider("github", {
+          listIssues: () => Effect.die("must use grouped continuation"),
+          listIssuesAcross: ({ repositories, cursor }) => {
+            calls++;
+            if (calls === 1) {
+              assert.deepStrictEqual(cursor?.seenAtByRepository, {
+                "acme/web": numbers,
+                "acme/api": [7],
+              });
+              return Effect.succeed({
+                items: [
+                  batchedIssue(200_000_000, "acme/web", boundary),
+                  batchedIssue(8, "acme/api", boundary),
+                ],
+                truncated: true,
+              });
+            }
+            assert.deepStrictEqual(repositories, ["acme/api"]);
+            assert.deepStrictEqual(cursor?.seenAtByRepository, { "acme/api": [7, 8] });
+            return Effect.succeed({
+              items: [batchedIssue(9, "acme/api", "2026-07-01T00:00:00Z")],
+              truncated: false,
+            });
+          },
+        }),
+      ],
+    });
+    const first = yield* service.list({
+      state: "open",
+      cursors: {
+        [cursorKey("acme/web")]: `${boundary}|0|${numbers.join(",")}`,
+        [cursorKey("acme/api")]: `${boundary}|0|7`,
+      },
+    });
+    assert.isTrue(first.cursorLimitReached);
+    assert.isTrue(first.truncated);
+    assert.deepStrictEqual(first.nextCursors, { [cursorKey("acme/api")]: `${boundary}|0|7,8` });
+    const second = yield* service.list({ state: "open", cursors: first.nextCursors });
+    assert.deepStrictEqual(
+      second.entries.map((entry) => entry.number),
+      [9],
+    );
+    assert.isUndefined(second.cursorLimitReached);
+    assert.isFalse(second.truncated);
+    assert.deepStrictEqual(second.nextCursors, {});
+    assert.strictEqual(calls, 2);
   }),
 );
 
@@ -1083,6 +1675,191 @@ it.effect("routes projects on one host through distinct credential viewers", () 
     );
     assert.strictEqual(result.providers.length, 1);
     assert.strictEqual(result.providers[0]?.projectCount, 2);
+  }),
+);
+
+it.effect.each(["assigned", "authored"] as const)(
+  "rebuilds project viewers after a selected-project %s listing",
+  (involvement) =>
+    Effect.gen(function* () {
+      const asked: Array<[string, string]> = [];
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/web" }),
+          project({ id: "p2", title: "api", workspaceRoot: "/api" }),
+          project({ id: "p3", title: "mobile", workspaceRoot: "/mobile" }),
+        ],
+        providers: [
+          fakeProvider("linear", {
+            resolveSource: (candidate) =>
+              Effect.succeed({
+                host: "linear.app",
+                repository: candidate.id.toUpperCase(),
+                credentialId: candidate.id === "p2" ? "user-2" : "user-1",
+              }),
+            getViewer: ({ credentialId }) => Effect.succeed(credentialId!),
+            listIssues: ({ repository, viewer }) => {
+              asked.push([repository, viewer]);
+              return Effect.succeed({
+                items: [
+                  {
+                    ...issue(7, "2026-07-02T00:00:00Z"),
+                    author: { login: viewer, name: null, avatarUrl: null },
+                    assignees: [{ login: viewer, name: null, avatarUrl: null }],
+                  },
+                ],
+                truncated: false,
+                continues: true,
+              });
+            },
+          }),
+        ],
+      });
+      yield* service.list({ state: "open", involvement, projectId: "p1" as ProjectId });
+      const otherProject = yield* service.list({
+        state: "open",
+        involvement,
+        projectId: "p3" as ProjectId,
+      });
+      assert.strictEqual(
+        otherProject.viewers[issueProjectSourceKey("linear", "linear.app", "p3" as ProjectId)],
+        "user-1",
+      );
+      const result = yield* service.list({ state: "open", involvement });
+      assert.deepStrictEqual(result.entries.map(({ projectId }) => projectId).toSorted(), [
+        "p1",
+        "p2",
+        "p3",
+      ]);
+      for (const [projectId, viewer] of [
+        ["p1", "user-1"],
+        ["p2", "user-2"],
+        ["p3", "user-1"],
+      ] as const) {
+        assert.strictEqual(
+          result.viewers[issueProjectSourceKey("linear", "linear.app", projectId as ProjectId)],
+          viewer,
+        );
+      }
+      assert.deepStrictEqual(asked.slice(2).toSorted(), [
+        ["P1", "user-1"],
+        ["P2", "user-2"],
+        ["P3", "user-1"],
+      ]);
+    }),
+);
+
+it.effect.each([false, true])(
+  "separates cached Linear reads after a same-team account switch, tracker mutation: %s",
+  (throughTracker) =>
+    Effect.gen(function* () {
+      let credentialId = "user-1";
+      const reads: string[] = [];
+      const connected = {
+        status: "authenticated" as const,
+        hasStoredToken: true,
+        accountName: null,
+        accountEmail: null,
+        projects: [],
+        accounts: [],
+      };
+      const service = yield* makeService({
+        projects: ONE_PROJECT,
+        providers: [
+          fakeProvider("linear", {
+            resolveSource: () =>
+              Effect.succeed({ host: "linear.app", repository: "ENG", credentialId }),
+            getViewer: ({ credentialId }) => Effect.succeed(credentialId!),
+            getIssue: ({ credentialId }) => {
+              reads.push(`detail:${credentialId}`);
+              return Effect.succeed(
+                issueDetail(7, { title: credentialId!, viewer: credentialId! }),
+              );
+            },
+            listIssues: ({ credentialId }) => {
+              reads.push(`list:${credentialId}`);
+              return Effect.succeed({
+                items: [{ ...issue(7, "2026-07-02T00:00:00Z"), title: credentialId! }],
+                truncated: false,
+                continues: true,
+              });
+            },
+            tracker: {
+              status: Effect.succeed(connected),
+              connect: () => Effect.succeed(connected),
+              disconnect: () => Effect.succeed(connected),
+              bind: (input) =>
+                Effect.sync(() => {
+                  credentialId = input.binding!.credentialId!;
+                }),
+            },
+          }),
+        ],
+      });
+      const reference = { ...REFERENCE, provider: "linear", repository: "ENG" };
+      for (const next of ["user-1", "user-2", "user-1"]) {
+        if (throughTracker) {
+          yield* service.trackerBind({
+            provider: "linear",
+            projectId: REFERENCE.projectId,
+            binding: { repository: "ENG", credentialId: next },
+          });
+        } else {
+          credentialId = next;
+        }
+        assert.strictEqual((yield* service.detail(reference)).title, next);
+        assert.strictEqual((yield* service.list({ state: "open" })).entries[0]?.title, next);
+      }
+      assert.deepStrictEqual(
+        reads,
+        throughTracker
+          ? [
+              "detail:user-1",
+              "list:user-1",
+              "detail:user-2",
+              "list:user-2",
+              "detail:user-1",
+              "list:user-1",
+            ]
+          : ["detail:user-1", "list:user-1", "detail:user-2", "list:user-2"],
+      );
+    }),
+);
+
+it.effect("pauses GitLab detail reads after a template quota failure", () =>
+  Effect.gen(function* () {
+    const provider = yield* GitLabIssueProvider.make.pipe(
+      Effect.provide(
+        Layer.mock(GitLabIssueCli.GitLabIssueCli)({
+          listIssueTemplates: () =>
+            Effect.fail(
+              new GitLabCli.GitLabCliRateLimitError({
+                operation: "execute",
+                command: "glab",
+                cwd: "/web",
+                cause: "429",
+              }),
+            ),
+          getIssueDetail: () => Effect.die("detail must not reach the CLI during cooldown"),
+        }),
+      ),
+    );
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/web",
+          provider: "gitlab",
+          repository: REFERENCE.repository,
+        }),
+      ],
+      providers: [provider],
+    });
+    const templateError = yield* service.templates(REFERENCE).pipe(Effect.flip);
+    const detailError = yield* service.detail(REFERENCE).pipe(Effect.flip);
+    assert.strictEqual((templateError.cause as IssueProviderError).reason, "rate-limited");
+    assert.strictEqual((detailError.cause as IssueProviderError).reason, "rate-limited");
   }),
 );
 
@@ -1834,6 +2611,111 @@ it.effect("an explicit invalidation makes the next listing ask the host again", 
   }),
 );
 
+it.effect("keeps a refreshed viewer when an older lookup finishes", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let viewerCalls = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          withCredential: (_host, read) => read("account"),
+          getViewer: () =>
+            ++viewerCalls === 1
+              ? Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.as("alice"),
+                )
+              : Effect.succeed("bob"),
+        }),
+      ],
+    });
+    const pending = yield* service.list({ state: "open" }).pipe(Effect.forkChild());
+    yield* Deferred.await(started);
+    yield* service.invalidate({});
+    const key = issueSourceKey("github", "github.com");
+    assert.equal((yield* service.list({ state: "open" })).viewers[key], "bob");
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(pending);
+    assert.equal((yield* service.list({ state: "all" })).viewers[key], "bob");
+    assert.equal(viewerCalls, 2);
+  }),
+);
+
+it.effect.each(["github", "linear", "gitlab", "azure-devops", "bitbucket", "forgejo"])(
+  "shares repeated and concurrent %s detail reads without spending extra host calls",
+  (provider) =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "p1",
+            title: "web",
+            workspaceRoot: "/a",
+            repository: "acme/web",
+            provider,
+          }),
+        ],
+        providers: [
+          fakeProvider(provider, {
+            getIssue: () =>
+              Effect.sync(() => {
+                calls += 1;
+                return issueDetail(7);
+              }),
+          }),
+        ],
+      });
+      const reads = yield* Effect.all(
+        Array.from({ length: 20 }, () => service.detail(REFERENCE)),
+        { concurrency: "unbounded" },
+      );
+      assert.isTrue(reads.every((read) => read.number === 7));
+      yield* service.detail(REFERENCE);
+      assert.equal(calls, 1);
+    }),
+);
+
+it.effect("keeps issue reads out of GitHub's reserve while allowing writes to use it", () =>
+  Effect.gen(function* () {
+    const read = AllowGitHubReserve.pipe(
+      Effect.flatMap((allowed) =>
+        allowed
+          ? Effect.succeed(issueDetail(7))
+          : Effect.fail(
+              new IssueProviderError({
+                provider: "github",
+                operation: "getIssue",
+                reason: "rate-limited",
+                detail: "Reserved quota",
+              }),
+            ),
+      ),
+    );
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: () => read,
+          getIssueActivity: () =>
+            read.pipe(
+              Effect.as({ comments: [], commentCount: 0, commentsTruncated: false, events: [] }),
+            ),
+          comment: () => read.pipe(Effect.asVoid),
+        }),
+      ],
+    });
+    assert.equal((yield* service.detail(REFERENCE).pipe(Effect.flip))._tag, "IssueOperationError");
+    assert.equal(
+      (yield* service.activity(REFERENCE).pipe(Effect.flip))._tag,
+      "IssueOperationError",
+    );
+    yield* service.comment({ ...REFERENCE, body: "Keep writes available" });
+  }),
+);
+
 it.effect("an explicit invalidation refreshes issue detail and activity", () =>
   Effect.gen(function* () {
     let detailVersion = 0;
@@ -1918,6 +2800,52 @@ it.effect("a write forgets the listings and the issue it touched, with no client
     yield* service.list({ state: "open" });
     yield* service.detail(REFERENCE);
     assert.deepStrictEqual([listCalls, detailCalls], [2, 2]);
+  }),
+);
+
+it.effect.each([
+  { provider: "github" as const, repository: "acme/web", alternate: " Acme/Web " },
+  { provider: "linear" as const, repository: "ENG", alternate: " eng " },
+])("invalidates $provider issue caches across repository case and spaces", (input) =>
+  Effect.gen(function* () {
+    let state: "open" | "closed" = "open";
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider(input.provider, {
+          resolveSource: () => Effect.succeed({ host: "host.test", repository: input.repository }),
+          getIssue: ({ repository }) => {
+            assert.equal(repository, input.repository);
+            return Effect.succeed(issueDetail(7, { state }));
+          },
+          getIssueActivity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: state === "open" ? 0 : 1,
+              commentsTruncated: false,
+              events: [],
+            }),
+          runAction: ({ repository }) =>
+            Effect.sync(() => {
+              assert.equal(repository, input.repository);
+              state = "closed";
+            }),
+        }),
+      ],
+    });
+    const ref = { ...REFERENCE, provider: input.provider, repository: input.repository };
+    assert.equal((yield* service.detail(ref)).state, "open");
+    assert.equal((yield* service.summary(ref)).state, "open");
+    assert.equal((yield* service.activity(ref)).commentCount, 0);
+    yield* service.runAction({ ...ref, repository: input.alternate, action: "close" });
+    assert.equal((yield* service.detail(ref)).state, "closed");
+    assert.equal((yield* service.summary(ref)).state, "closed");
+    assert.equal((yield* service.activity(ref)).commentCount, 1);
+    state = "open";
+    yield* service.invalidate({ reference: { ...ref, repository: input.alternate } });
+    assert.equal((yield* service.detail(ref)).state, "open");
+    assert.equal((yield* service.summary(ref)).state, "open");
+    assert.equal((yield* service.activity(ref)).commentCount, 0);
   }),
 );
 
@@ -2101,6 +3029,138 @@ it.effect("reads a host's repositories in one search, and files the rows back un
       ],
     );
   }),
+);
+
+it.effect(
+  "reports the GitHub search ceiling across grouped repositories without a stalled cursor",
+  () =>
+    Effect.gen(function* () {
+      const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+      for (const total of [1000, 1001]) {
+        let searches = 0;
+        const provider = yield* GitHubIssueProvider.make.pipe(
+          Effect.provide(
+            GitHubIssueCli.layer.pipe(
+              Layer.provideMerge(
+                Layer.mock(GitHubApi.GitHubApi)({
+                  credential: () =>
+                    Effect.succeed({ token: Redacted.make("test-token"), fingerprint: "test" }),
+                  graphql: ({ operation, variables }) =>
+                    Effect.gen(function* () {
+                      if (operation === "getViewerLogin") {
+                        return yield* encodeJson({ data: { viewer: { login: "bilal" } } });
+                      }
+                      searches += 1;
+                      const start = Number(variables?.["cursor"] ?? 0);
+                      const end = Math.min(start + 100, total);
+                      return yield* encodeJson({
+                        data: {
+                          search: {
+                            nodes: Array.from({ length: end - start }, (_, index) => {
+                              const number = start + index + 1;
+                              return {
+                                number,
+                                title: `Issue ${number}`,
+                                url: `https://github.com/acme/web/issues/${number}`,
+                                createdAt: "2026-07-01T00:00:00Z",
+                                updatedAt: "2026-07-02T00:00:00Z",
+                                repository: { nameWithOwner: number % 2 ? "acme/web" : "acme/api" },
+                              };
+                            }),
+                            pageInfo: { hasNextPage: end < total, endCursor: String(end) },
+                          },
+                        },
+                      });
+                    }).pipe(Effect.orDie),
+                }),
+              ),
+            ),
+          ),
+        );
+        const service = yield* makeService({ projects: TWO_PROJECTS, providers: [provider] });
+        const result = yield* service.list({ state: "open", limit: 99 });
+        assert.strictEqual(result.entries.length, 1000);
+        assert.strictEqual(result.truncated, total > 1000);
+        assert.deepStrictEqual(result.nextCursors, {});
+        assert.strictEqual(searches, 10);
+      }
+    }),
+);
+
+it.effect("does not repeat a grouped cursor after the provider reaches its ceiling", () =>
+  Effect.gen(function* () {
+    const boundary = "2026-07-02T00:00:00Z";
+    const service = yield* makeService({
+      projects: TWO_PROJECTS,
+      providers: [
+        fakeProvider("github", {
+          listIssuesAcross: () =>
+            Effect.succeed({
+              items: [batchedIssue(7, "acme/web", boundary), batchedIssue(8, "acme/api", boundary)],
+              truncated: true,
+              ceilingReached: true,
+            }),
+        }),
+      ],
+    });
+    const result = yield* service.list({
+      state: "open",
+      cursors: {
+        [cursorKey("acme/web")]: `${boundary}|0|7`,
+        [cursorKey("acme/api")]: `${boundary}|0|8`,
+      },
+    });
+    assert.deepStrictEqual(result.entries, []);
+    assert.isTrue(result.truncated);
+    assert.deepStrictEqual(result.nextCursors, {});
+  }),
+);
+
+it.effect(
+  "carries on grouped listings without counting another repository's seen issue number",
+  () =>
+    Effect.gen(function* () {
+      const boundary = "2026-07-02T00:00:00Z";
+      const firstRows = [
+        batchedIssue(7, "acme/web", boundary),
+        batchedIssue(8, "acme/api", boundary),
+      ];
+      const service = yield* makeService({
+        projects: TWO_PROJECTS,
+        providers: [
+          fakeProvider("github", {
+            listIssues: () => Effect.die("must use grouped continuation"),
+            listIssuesAcross: ({ cursor, limit }) => {
+              const rows =
+                cursor === undefined
+                  ? firstRows
+                  : [
+                      ...firstRows,
+                      batchedIssue(7, "acme/api", boundary),
+                      batchedIssue(8, "acme/web", "2026-07-01T00:00:00Z"),
+                    ].filter(
+                      (row) =>
+                        row.updatedAt !== cursor.updatedBefore ||
+                        !cursor.seenAtByRepository?.[row.repository]?.includes(row.number),
+                    );
+              return Effect.succeed({
+                items: rows.slice(0, limit),
+                truncated: cursor === undefined,
+              });
+            },
+          }),
+        ],
+      });
+      const first = yield* service.list({ state: "open", limit: 2 });
+      const second = yield* service.list({ state: "open", limit: 2, cursors: first.nextCursors });
+      assert.deepStrictEqual(
+        second.entries.map(({ repository, number }) => [repository, number]),
+        [
+          ["acme/api", 7],
+          ["acme/web", 8],
+        ],
+      );
+    }),
 );
 
 it.effect("asks on its own for a repository the search said nothing at all about", () =>

@@ -13,6 +13,8 @@ import type {
   IssueEventKind,
   IssueLabelCandidate,
   IssueLinkedPullRequest,
+  IssueRelative,
+  IssueRelativeNode,
   IssueReaction,
   IssueState,
   IssueTemplate,
@@ -186,6 +188,45 @@ const RawCommentsSchema = Schema.Struct({
   nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawCommentSchema)))),
 });
 
+const RawLinkedPullRequestsSchema = Schema.Struct({
+  closedByPullRequestsReferences: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawReferenceSchema)))),
+      }),
+    ),
+  ),
+  timelineItems: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+      }),
+    ),
+  ),
+});
+
+const RawRelativeFieldsSchema = Schema.Struct({
+  number: Schema.Int.check(Schema.isGreaterThan(0)),
+  title: Schema.NonEmptyString,
+  url: Schema.NonEmptyString,
+  state: Schema.Literals(["OPEN", "CLOSED"]),
+  repository: Schema.Struct({ nameWithOwner: Schema.NonEmptyString }),
+  ...RawLinkedPullRequestsSchema.fields,
+});
+
+interface RawRelative extends Schema.Schema.Type<typeof RawRelativeFieldsSchema> {
+  readonly parent?: RawRelative | null | undefined;
+  readonly subIssues?: { readonly nodes: ReadonlyArray<RawRelative | null> } | undefined;
+}
+
+const RawRelativeSchema: Schema.Codec<RawRelative> = Schema.Struct({
+  ...RawRelativeFieldsSchema.fields,
+  parent: Schema.optional(Schema.NullOr(Schema.suspend(() => RawRelativeSchema))),
+  subIssues: Schema.optional(
+    Schema.Struct({ nodes: Schema.Array(Schema.NullOr(Schema.suspend(() => RawRelativeSchema))) }),
+  ),
+});
+
 const RawIssueSupplementSchema = Schema.Struct({
   data: Schema.Struct({
     repository: Schema.Struct({
@@ -203,21 +244,10 @@ const RawIssueSupplementSchema = Schema.Struct({
             ),
           ),
           comments: Schema.optional(Schema.NullOr(Schema.Struct({ totalCount: Schema.Int }))),
-          closedByPullRequestsReferences: Schema.optional(
-            Schema.NullOr(
-              Schema.Struct({
-                nodes: Schema.optional(
-                  Schema.NullOr(Schema.Array(Schema.NullOr(RawReferenceSchema))),
-                ),
-              }),
-            ),
-          ),
-          timelineItems: Schema.optional(
-            Schema.NullOr(
-              Schema.Struct({
-                nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
-              }),
-            ),
+          ...RawLinkedPullRequestsSchema.fields,
+          parent: Schema.optional(Schema.NullOr(RawRelativeSchema)),
+          subIssues: Schema.optional(
+            Schema.Struct({ nodes: Schema.Array(Schema.NullOr(RawRelativeSchema)) }),
           ),
         }),
       ),
@@ -489,6 +519,40 @@ export function issueSearchGraphQlQuery(rows: number): string {
 }`;
 }
 
+function linkedPullRequestFields(closing: number, timeline: number): string {
+  return `closedByPullRequestsReferences(first: ${closing}, includeClosedPrs: true, userLinkedOnly: false) {
+        nodes { number title url state isDraft repository { nameWithOwner } }
+      }
+      timelineItems(last: ${timeline}, itemTypes: [CONNECTED_EVENT, CROSS_REFERENCED_EVENT, DISCONNECTED_EVENT]) {
+        nodes {
+          __typename
+          ... on ConnectedEvent {
+            subject { __typename ... on PullRequest { number title url state isDraft repository { nameWithOwner } } }
+          }
+          ... on DisconnectedEvent {
+            subject { __typename ... on PullRequest { number repository { nameWithOwner } } }
+          }
+          ... on CrossReferencedEvent {
+            source { __typename ... on PullRequest { number title url state isDraft repository { nameWithOwner } } }
+          }
+        }
+      }`;
+}
+
+const RELATIVE_FIELDS = "number title url state repository { nameWithOwner }";
+const RELATIVE_WITH_PULL_REQUESTS = `${RELATIVE_FIELDS} ${linkedPullRequestFields(5, 5)}`;
+const ISSUE_HIERARCHY_FIELDS = `
+  parent { ${RELATIVE_WITH_PULL_REQUESTS} parent { ${RELATIVE_FIELDS} parent { ${RELATIVE_FIELDS} } } }
+  subIssues(first: 20) {
+    nodes {
+      ${RELATIVE_WITH_PULL_REQUESTS}
+      subIssues(first: 10) {
+        nodes { ${RELATIVE_FIELDS} subIssues(first: 5) { nodes { ${RELATIVE_FIELDS} } } }
+      }
+    }
+  }
+`;
+
 /**
  * Everything about one issue that `gh issue view --json` cannot answer: where the viewer stands,
  * the faces the CLI reports for nobody, the size of the conversation, and the change requests that
@@ -500,7 +564,7 @@ export function issueSearchGraphQlQuery(rows: number): string {
  * `DisconnectedEvent` is how that is taken back. Everything else that names the issue is an
  * ordinary cross-reference, which is a mention rather than a promise to close it.
  */
-export const ISSUE_SUPPLEMENT_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+export const ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   viewer { login }
   repository(owner: $owner, name: $name) {
     viewerPermission
@@ -514,26 +578,15 @@ export const ISSUE_SUPPLEMENT_GRAPHQL_QUERY = `query($owner: String!, $name: Str
       author { login avatarUrl ... on User { name } }
       assignees(first: 100) { nodes { login name avatarUrl } }
       comments { totalCount }
-      closedByPullRequestsReferences(first: 20, includeClosedPrs: true, userLinkedOnly: false) {
-        nodes { number title url state isDraft repository { nameWithOwner } }
-      }
-      timelineItems(last: ${TIMELINE_ITEMS}, itemTypes: [CONNECTED_EVENT, CROSS_REFERENCED_EVENT, DISCONNECTED_EVENT]) {
-        nodes {
-          __typename
-          ... on ConnectedEvent {
-            subject { __typename ... on PullRequest { number title url state isDraft repository { nameWithOwner } } }
-          }
-          ... on DisconnectedEvent {
-            subject { __typename ... on PullRequest { number repository { nameWithOwner } } }
-          }
-          ... on CrossReferencedEvent {
-            source { __typename ... on PullRequest { number title url state isDraft repository { nameWithOwner } } }
-          }
-        }
-      }
+      ${linkedPullRequestFields(20, TIMELINE_ITEMS)}
     }
   }
 }`;
+
+export const ISSUE_SUPPLEMENT_GRAPHQL_QUERY = ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY.replace(
+  "comments { totalCount }",
+  `comments { totalCount } ${ISSUE_HIERARCHY_FIELDS}`,
+);
 
 /**
  * The viewer's standing, asked on its own. Only the write path needs this: reading an issue
@@ -766,6 +819,8 @@ export interface GitHubIssueSupplement {
   readonly avatarsByLogin: ReadonlyMap<string, string>;
   readonly commentCount: number;
   readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
+  readonly ancestors: ReadonlyArray<IssueRelative>;
+  readonly subIssues: ReadonlyArray<IssueRelativeNode>;
 }
 
 /**
@@ -1086,6 +1141,47 @@ export function decodeIssueSupplementJson(
     if (login !== null && avatarUrl !== null) avatarsByLogin.set(login, avatarUrl);
   }
 
+  const ancestors: Array<IssueRelative> = [];
+  for (let parent = issue?.parent; parent; parent = parent.parent) {
+    ancestors.unshift(toRelative(parent));
+  }
+  return Result.succeed({
+    viewer: toViewerAccess(repository),
+    avatarsByLogin,
+    commentCount: Math.max(0, issue?.comments?.totalCount ?? 0),
+    linkedPullRequests: linkedPullRequests(issue),
+    ancestors,
+    subIssues: (issue?.subIssues?.nodes ?? []).flatMap((node) =>
+      node === null ? [] : [toRelativeNode(node)],
+    ),
+  });
+}
+
+function toRelative(issue: RawRelative): IssueRelative {
+  return {
+    repository: issue.repository.nameWithOwner,
+    number: issue.number,
+    title: issue.title,
+    url: issue.url,
+    state: toState(issue.state),
+    ...(issue.closedByPullRequestsReferences !== undefined || issue.timelineItems !== undefined
+      ? { linkedPullRequests: linkedPullRequests(issue) }
+      : {}),
+  };
+}
+
+function toRelativeNode(issue: RawRelative): IssueRelativeNode {
+  return {
+    ...toRelative(issue),
+    subIssues: (issue.subIssues?.nodes ?? []).flatMap((node) =>
+      node === null ? [] : [toRelativeNode(node)],
+    ),
+  };
+}
+
+function linkedPullRequests(
+  issue: Schema.Schema.Type<typeof RawLinkedPullRequestsSchema> | null,
+): ReadonlyArray<IssueLinkedPullRequest> {
   // Whoever GitHub says closes the issue leads, then the hand-made connections still standing,
   // then the mentions — so a change request seen twice is filed under the stronger relationship.
   const links = new Map<string, IssueLinkedPullRequest>();
@@ -1118,12 +1214,7 @@ export function decodeIssueSupplementJson(
     if (!links.has(key)) links.set(key, link);
   }
 
-  return Result.succeed({
-    viewer: toViewerAccess(repository),
-    avatarsByLogin,
-    commentCount: Math.max(0, issue?.comments?.totalCount ?? 0),
-    linkedPullRequests: [...links.values()],
-  });
+  return [...links.values()];
 }
 
 export function decodeIssueViewerPermissionsJson(
@@ -1560,6 +1651,8 @@ export interface GitHubIssueCore extends GitHubIssueDetail {
   readonly viewerAccess: GitHubIssueViewerAccess;
   readonly viewerLogin: string;
   readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
+  readonly ancestors: ReadonlyArray<IssueRelative>;
+  readonly subIssues: ReadonlyArray<IssueRelativeNode>;
 }
 
 const decodeCore = Schema.decodeResult(
@@ -1592,6 +1685,8 @@ export function decodeIssueCoreJson(
         viewerAccess: supplement.viewer,
         viewerLogin: data.viewer.login,
         linkedPullRequests: supplement.linkedPullRequests,
+        ancestors: supplement.ancestors,
+        subIssues: supplement.subIssues,
       };
     }),
   );

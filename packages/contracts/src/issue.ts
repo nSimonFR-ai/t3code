@@ -14,7 +14,6 @@ import {
   ChangeRequestState,
   SourceControlActor,
   SourceControlLabel,
-  SourceControlListCursors,
   SourceControlListProjectError,
 } from "./sourceControl.ts";
 
@@ -178,8 +177,8 @@ export const IssueLinkedPullRequest = Schema.Struct({
 });
 export type IssueLinkedPullRequest = typeof IssueLinkedPullRequest.Type;
 
-/** A parent or sub-issue in the same tracker project as the issue that carries it. */
 export const IssueRelative = Schema.Struct({
+  repository: Schema.optional(TrimmedNonEmptyString),
   number: PositiveInt,
   title: TrimmedNonEmptyString,
   url: TrimmedNonEmptyString,
@@ -301,7 +300,11 @@ export const IssueListEntry = Schema.Struct({
 });
 export type IssueListEntry = typeof IssueListEntry.Type;
 
-export const IssueListCursors = SourceControlListCursors;
+export const ISSUE_LIST_CURSOR_MAX_LENGTH = 16_384;
+export const IssueListCursors = Schema.Record(
+  TrimmedNonEmptyString,
+  TrimmedNonEmptyString.check(Schema.isMaxLength(ISSUE_LIST_CURSOR_MAX_LENGTH)),
+);
 export type IssueListCursors = typeof IssueListCursors.Type;
 
 export const IssueListInput = Schema.Struct({
@@ -361,6 +364,7 @@ export const IssueListResult = Schema.Struct({
   errors: Schema.Array(IssueListProjectError),
   /** At least one repository hit the per-repository listing cap. */
   truncated: Schema.Boolean,
+  cursorLimitReached: Schema.optional(Schema.Boolean),
   /** Where each repository carries on, to be sent straight back as `cursors`. */
   nextCursors: IssueListCursors,
 });

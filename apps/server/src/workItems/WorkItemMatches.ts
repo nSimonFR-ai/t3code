@@ -1,5 +1,6 @@
 import {
   WorkItemMatchError,
+  normalizeWorkItemLinkKey,
   type WorkItemMatchInput,
   type WorkItemMatchResult,
 } from "@t3tools/contracts";
@@ -11,11 +12,7 @@ import * as IssueService from "../issue/IssueService.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
-import {
-  resolveWorkItemMatches,
-  shortlistWorkItemCandidates,
-  workItemIdentityKey,
-} from "./WorkItemMatching.ts";
+import { resolveWorkItemMatches, shortlistWorkItemCandidates } from "./WorkItemMatching.ts";
 
 export class WorkItemMatches extends Context.Service<
   WorkItemMatches,
@@ -48,13 +45,12 @@ const make = Effect.gen(function* () {
                 referenceStyle: detail.capabilities.referenceStyle,
                 known:
                   input.relationship === "related"
-                    ? detail.linkedPullRequests.map((link) =>
-                        workItemIdentityKey({
-                          kind: "pull-request",
-                          provider: detail.provider,
-                          repository: link.repository,
-                          number: link.number,
-                        }),
+                    ? detail.linkedPullRequests.map(
+                        (link) =>
+                          normalizeWorkItemLinkKey({
+                            provider: detail.provider,
+                            url: link.url,
+                          }).url,
                       )
                     : [],
               })),
@@ -74,13 +70,12 @@ const make = Effect.gen(function* () {
                 referenceStyle: "hash" as const,
                 known:
                   input.relationship === "related"
-                    ? (detail.linkedIssues ?? []).map((link) =>
-                        workItemIdentityKey({
-                          kind: "issue",
-                          provider: detail.provider,
-                          repository: link.repository,
-                          number: link.number,
-                        }),
+                    ? (detail.linkedIssues ?? []).map(
+                        (link) =>
+                          normalizeWorkItemLinkKey({
+                            provider: detail.provider,
+                            url: link.url,
+                          }).url,
                       )
                     : [],
               })),
@@ -152,9 +147,7 @@ const make = Effect.gen(function* () {
         source,
         listed.entries
           .slice(0, 50)
-          .filter(
-            (entry) => !knownItems.has(workItemIdentityKey({ ...entry, kind: candidateKind })),
-          )
+          .filter((entry) => !knownItems.has(normalizeWorkItemLinkKey(entry).url))
           .map((entry) => ({ ...entry, kind: candidateKind })),
       );
       const candidateDetails = yield* Effect.forEach(

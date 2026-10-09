@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
@@ -367,9 +368,6 @@ const make = Effect.gen(function* () {
     listIssues: (input) =>
       withRepository(input.repository, (path) => {
         const search = input.query?.trim() ?? "";
-        // The boundary instant is read inclusively — the rows already sent at it come back and
-        // the caller drops them, which is what keeps their neighbours at the same instant from
-        // being skipped.
         const predicates = [
           stateFilter(input.state),
           ...(input.involvement === "assigned" || input.involvement === "authored"
@@ -378,7 +376,15 @@ const make = Effect.gen(function* () {
               ]
             : []),
           ...(search.length === 0 ? [] : [searchFilter(search)]),
-          ...(input.cursor === undefined ? [] : [`updated_on <= ${input.cursor.updatedBefore}`]),
+          ...(input.cursor === undefined
+            ? []
+            : [
+                `updated_on < ${DateTime.formatIso(
+                  DateTime.add(DateTime.makeUnsafe(input.cursor.updatedBefore), {
+                    milliseconds: 1,
+                  }),
+                )}`,
+              ]),
           ...(input.cursor?.seenAt ?? []).map((number) => `id != ${number}`),
         ];
         const sort = input.order === "asc" ? "updated_on" : "-updated_on";

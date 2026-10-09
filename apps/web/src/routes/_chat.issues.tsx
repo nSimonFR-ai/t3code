@@ -27,6 +27,7 @@ import {
   LayersIcon,
   PenLineIcon,
   Plug2Icon,
+  PlusIcon,
   UserCheckIcon,
   UsersIcon,
   type LucideIcon,
@@ -110,6 +111,7 @@ import {
   findProjectForLink,
   linkedPullRequestTarget,
   openLinkInBrowser,
+  relatedIssueTarget,
   repositoryForProjectLink,
 } from "../lib/openIssueLink";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
@@ -331,6 +333,29 @@ const EMPTY_PREVIEW_DESKTOP_STATE = {};
 const EMPTY_TERMINAL_LABELS = new Map<string, string>();
 const EMPTY_PENDING_SURFACES = new Set<string>();
 
+export function patchIssuesSearch(
+  previous: IssuesSearch,
+  patch: { [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined },
+): IssuesSearch {
+  // Rebuilt rather than spread so a cleared field leaves the URL instead of
+  // lingering as an explicit `undefined`.
+  const next = { ...previous, ...patch };
+  return {
+    involvement: next.involvement ?? previous.involvement,
+    state: next.state ?? previous.state,
+    ...(next.repository ? { repository: next.repository } : {}),
+    ...(next.number ? { number: next.number } : {}),
+    ...(next.projectId ? { projectId: next.projectId } : {}),
+    ...(next.host ? { host: next.host } : {}),
+    ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
+    ...(next.selectedProvider ? { selectedProvider: next.selectedProvider } : {}),
+    ...(next.label ? { label: next.label } : {}),
+    ...(next.q ? { q: next.q } : {}),
+    ...(next.sort ? { sort: next.sort } : {}),
+    ...(next.order ? { order: next.order } : {}),
+  };
+}
+
 export const Route = createFileRoute("/_chat/issues")({
   validateSearch: (raw: Record<string, unknown>): IssuesSearch => {
     const sort = issueListSort(raw.sort);
@@ -500,24 +525,7 @@ function IssuesRouteView() {
       [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
     }) =>
       void navigate({
-        // Rebuilt rather than spread so a cleared field leaves the URL instead of
-        // lingering as an explicit `undefined`.
-        search: (previous: IssuesSearch): IssuesSearch => {
-          const next = { ...previous, ...patch };
-          return {
-            involvement: next.involvement ?? previous.involvement,
-            state: next.state ?? previous.state,
-            ...(next.repository ? { repository: next.repository } : {}),
-            ...(next.number ? { number: next.number } : {}),
-            ...(next.projectId ? { projectId: next.projectId } : {}),
-            ...(next.host ? { host: next.host } : {}),
-            ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
-            ...(next.selectedProvider ? { selectedProvider: next.selectedProvider } : {}),
-            ...(next.q ? { q: next.q } : {}),
-            ...(next.sort ? { sort: next.sort } : {}),
-            ...(next.order ? { order: next.order } : {}),
-          };
-        },
+        search: (previous: IssuesSearch) => patchIssuesSearch(previous, patch),
         replace: true,
       }),
     [navigate],
@@ -826,6 +834,7 @@ function IssuesRouteView() {
   const [ordered, setOrdered] = useState<{
     key: string;
     entries: ReadonlyArray<IssueListEntry>;
+    cursorLimitReached: boolean;
   } | null>(null);
   useEffect(() => {
     if (!answered) return;
@@ -839,16 +848,21 @@ function IssuesRouteView() {
         return {
           key: filterKey,
           entries: hostOrdered,
+          cursorLimitReached: answered.cursorLimitReached === true,
         };
       }
-      if (sentCursors !== null) {
+      if (sentCursors !== null || answered.errors.length > 0) {
         // A continuation is a slice, not the list: it carries only what comes after the rows
         // already held, and says nothing about a repository that has run out. Everything on
         // screen therefore stays, and the slice — ordered among itself, since one repository's
         // next rows can be newer than another's last — lands under it.
         const held = new Set(previous.entries.map(issueEntryKey));
         const arrived = answered.entries.filter((entry) => !held.has(issueEntryKey(entry)));
-        return { key: filterKey, entries: [...previous.entries, ...arrived] };
+        return {
+          key: filterKey,
+          entries: [...previous.entries, ...arrived],
+          cursorLimitReached: previous.cursorLimitReached || answered.cursorLimitReached === true,
+        };
       }
       // A whole-page answer replaces the order outright: the host answers in the order the page
       // reads, so its order stands, and an issue opened since the last read belongs at the top
@@ -856,6 +870,7 @@ function IssuesRouteView() {
       return {
         key: filterKey,
         entries: hostOrdered,
+        cursorLimitReached: answered.cursorLimitReached === true,
       };
     });
   }, [answered, filterKey, order, sentCursors, sentQuery, sort]);
@@ -867,11 +882,17 @@ function IssuesRouteView() {
   // new question to start where the old one stopped — skipping its newest matches entirely.
   const nextCursors = answered?.nextCursors ?? {};
   const canContinue = !showingCarried && Object.keys(nextCursors).length > 0;
+  const cursorLimitReached =
+    (ordered?.key === filterKey && ordered.cursorLimitReached) ||
+    answered?.cursorLimitReached === true;
+  const truncated = listData?.truncated === true || cursorLimitReached;
+  const canGrow = !cursorLimitReached && pageSize < MAX_PAGE_SIZE;
   const loadMore = () => {
     if (canContinue) {
       setPage({ key: filterKey, size: pageSize, cursors: nextCursors });
       return;
     }
+    if (!canGrow) return;
     setPage({
       key: filterKey,
       size: Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE),
@@ -913,7 +934,21 @@ function IssuesRouteView() {
   );
 
   const viewers = baselineQuery.data?.viewers ?? listData?.viewers ?? EMPTY_VIEWERS;
-  const listErrors = baselineQuery.data?.errors ?? listData?.errors ?? [];
+  const pageErrors = answered?.errors;
+  const pageFailure = pageErrors?.map((error) => error.message).join(" ") || null;
+  const listErrors = useMemo(
+    () => [
+      ...(pageErrors ?? []),
+      ...(baselineQuery.data?.errors ?? []).filter(
+        (error) => !pageErrors?.some((pageError) => pageError.projectId === error.projectId),
+      ),
+    ],
+    [baselineQuery.data?.errors, pageErrors],
+  );
+  const retryPage = async () => {
+    await invalidateHost();
+    (baselineVisible ? baselineQuery : listQuery).refresh();
+  };
 
   /** The hosts that narrowed the listing themselves, so their answer is not narrowed again. */
   const searchingHosts = useMemo(
@@ -967,55 +1002,6 @@ function IssuesRouteView() {
     return [...names].sort((left, right) => left.localeCompare(right));
   }, [filterKey, listData, ordered, search.label]);
 
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-    // A failed page must stop the observer. Retained rows keep the sentinel on screen, so
-    // re-arming it after a failure would ask for the next page again, forever.
-    //
-    // Rows on screen are also what makes reaching the sentinel mean anything: with none, it
-    // sits directly below the empty state and is always in view, so a search that matches
-    // nothing would page through the whole host on its own — one listing of every repository
-    // per step — while the reader looks at an empty page. With nothing to scroll past, the
-    // next page is asked for rather than assumed.
-    if (
-      !sentinel ||
-      entries.length === 0 ||
-      listData?.truncated !== true ||
-      listQuery.isPending ||
-      listQuery.error !== null ||
-      // The rows on screen belong to the previous question, so nothing about them says where
-      // this one carries on from. Growing the page under them would answer neither.
-      showingCarried ||
-      // Asking past the cap is refused, which would strand the list on an error the retry
-      // could never clear, so growth stops here and the rest stays on the host. A continuation
-      // does not grow the page at all, so the cap does not apply to it.
-      (!canContinue && pageSize >= MAX_PAGE_SIZE)
-    ) {
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (observed) => {
-        if (observed.some((entry) => entry.isIntersecting)) {
-          loadMore();
-        }
-      },
-      // Start the next page slightly before the sentinel is on screen.
-      { rootMargin: "240px" },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [
-    entries.length,
-    filterKey,
-    canContinue,
-    listData?.truncated,
-    listQuery.error,
-    listQuery.isPending,
-    pageSize,
-    showingCarried,
-  ]);
-
   const groups = useMemo(() => {
     if (
       search.involvement !== "all" ||
@@ -1061,6 +1047,60 @@ function IssuesRouteView() {
     sort,
     typedQuery.length,
     viewers,
+  ]);
+
+  const visibleRowCount = groups.reduce((count, group) => count + group.entries.length, 0);
+
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    // A failed page must stop the observer. Retained rows keep the sentinel on screen, so
+    // re-arming it after a failure would ask for the next page again, forever.
+    //
+    // Rows on screen are also what makes reaching the sentinel mean anything: with none, it
+    // sits directly below the empty state and is always in view, so a search that matches
+    // nothing would page through the whole host on its own — one listing of every repository
+    // per step — while the reader looks at an empty page. With nothing to scroll past, the
+    // next page is asked for rather than assumed.
+    if (
+      !sentinel ||
+      visibleRowCount === 0 ||
+      !truncated ||
+      listQuery.isPending ||
+      listQuery.error !== null ||
+      pageFailure !== null ||
+      // The rows on screen belong to the previous question, so nothing about them says where
+      // this one carries on from. Growing the page under them would answer neither.
+      showingCarried ||
+      // Asking past the cap is refused, which would strand the list on an error the retry
+      // could never clear, so growth stops here and the rest stays on the host. A continuation
+      // does not grow the page at all, so the cap does not apply to it.
+      (!canContinue && !canGrow)
+    ) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (observed) => {
+        if (observed.some((entry) => entry.isIntersecting)) {
+          loadMore();
+        }
+      },
+      // Start the next page slightly before the sentinel is on screen.
+      { rootMargin: "240px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [
+    visibleRowCount,
+    filterKey,
+    canContinue,
+    canGrow,
+    truncated,
+    listQuery.error,
+    listQuery.isPending,
+    pageFailure,
+    pageSize,
+    showingCarried,
   ]);
 
   // A link from a thread or the sidebar only knows the repository, so the owning project is
@@ -1216,7 +1256,6 @@ function IssuesRouteView() {
     [issueEnvironmentId, toggleWorkItem],
   );
 
-  const [creating, setCreating] = useState(false);
   const openLinearSettings = () => void navigate({ to: "/settings/integrations", hash: "linear" });
   const searchInput = (
     <ListSearchInput
@@ -1236,7 +1275,6 @@ function IssuesRouteView() {
       threadPanelOpen={false}
       threadPanelPresentation="inline"
       threadPanelShortcutLabel={null}
-      threadPanelHasAttention={false}
       onToggleThreadPanel={() => undefined}
       rightPanelAvailable={rightPanelAvailable}
       rightPanelOpen={rightPanelState.isOpen}
@@ -1259,8 +1297,10 @@ function IssuesRouteView() {
   // these filters" is a claim, and it is the wrong one to make about a question still in flight,
   // so that case waits with the skeletons rather than answering for the hosts. A search says so
   // in its own words and is left to.
+  const heldCount = (ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []))
+    .length;
   const carriedToNothing =
-    showingCarried && listQuery.isPending && entries.length === 0 && typedQuery.length === 0;
+    showingCarried && listQuery.isPending && visibleRowCount === 0 && typedQuery.length === 0;
   const listBody = (
     <>
       {!capabilityKnown ? (
@@ -1278,9 +1318,15 @@ function IssuesRouteView() {
           refreshing={listQuery.isPending}
           onRetry={() => listQuery.refresh()}
         />
+      ) : pageFailure !== null && heldCount === 0 ? (
+        <IssuesUnavailableState
+          error={pageFailure}
+          refreshing={refreshing}
+          onRetry={() => void retryPage()}
+        />
       ) : carriedToNothing ? (
         <ListGhost rows={7} label="Loading issues" />
-      ) : entries.length === 0 ? (
+      ) : visibleRowCount === 0 ? (
         <IssueListEmptyState
           hasProjects={!projectsKnown || projects.length > 0}
           refreshing={refreshing}
@@ -1293,7 +1339,7 @@ function IssuesRouteView() {
             search.host !== undefined
           }
           searching={typedQuery.length > 0 && (!querySettled || showingCarried)}
-          canLoadMore={listData?.truncated === true && (canContinue || pageSize < MAX_PAGE_SIZE)}
+          canLoadMore={pageFailure === null && truncated && (canContinue || canGrow)}
           loadingMore={loadingMore}
           onClearQuery={() => updateSearch({ q: undefined })}
           onLoadMore={loadMore}
@@ -1347,13 +1393,28 @@ function IssuesRouteView() {
           </Button>
         </div>
       ) : null}
-      {listData?.truncated && entries.length > 0 ? (
+      {pageFailure !== null && heldCount > 0 ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
+          <span>{pageFailure} Showing the issues that loaded.</span>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={refreshing}
+            onClick={() => void retryPage()}
+          >
+            Retry
+          </Button>
+        </div>
+      ) : null}
+      {truncated && (visibleRowCount > 0 || (cursorLimitReached && !canContinue)) ? (
         <div ref={sentinelRef} className="flex justify-center py-3 text-xs text-muted-foreground">
           {loadingMore ? (
             <span className="flex items-center gap-2">
               <Spinner aria-hidden size="sm" />
               {sentCursors === null ? "Updating issues" : "Loading more"}
             </span>
+          ) : cursorLimitReached && !canContinue ? (
+            "More issues remain on the host."
           ) : null}
         </div>
       ) : null}
@@ -1442,6 +1503,26 @@ function IssuesRouteView() {
       updateListScope({ host, sort: undefined, order: undefined }),
     searchInput,
     filtersMenu,
+    newIssueControl:
+      issueEnvironmentId === null ? null : (
+        <NewIssueControl
+          environmentId={issueEnvironmentId}
+          projects={scopedProjects}
+          projectId={scopedProjectId}
+          // Filed and then read: the new issue opens in the panel, and the list it was filed
+          // from is a row out of date until the hosts are asked again.
+          onCreated={(created) => {
+            if (rightPanelRef !== null) {
+              useRightPanelStore.getState().openIssue(rightPanelRef, created);
+            }
+            updateSearch(issueSelectionSearchPatch(created));
+            refreshList();
+            baselineQuery.refresh();
+            authoredQuery.refresh();
+            assignedQuery.refresh();
+          }}
+        />
+      ),
     rightPanelControl: !issuesSupported ? null : (
       <span
         aria-hidden
@@ -1662,15 +1743,18 @@ function IssuesRouteView() {
                 // The change request that closes an issue is read beside it, as a peer tab in
                 // this page's own panel: leaving for the pull requests page would take the issue
                 // it answers off the screen.
-                onOpenRelatedIssue={({ number }) => {
-                  if (rightPanelRef === null) return;
+                onOpenRelatedIssue={(relative) => {
+                  const related = relatedIssueTarget(projects, renderedSurface, relative);
+                  if (rightPanelRef === null || related === null) {
+                    openLinkInBrowser(relative.url);
+                    return;
+                  }
                   const target = {
-                    projectId: renderedSurface.projectId as ProjectId,
+                    ...related,
+                    projectId: related.projectId as ProjectId,
                     ...(renderedSurface.provider === undefined
                       ? {}
                       : { provider: renderedSurface.provider }),
-                    repository: renderedSurface.repository,
-                    number,
                   };
                   useRightPanelStore.getState().openIssue(rightPanelRef, target);
                   updateSearch(issueSelectionSearchPatch(target));
@@ -1701,31 +1785,23 @@ function IssuesRouteView() {
           </RightPanelTabs>
         ) : null}
       </div>
-
-      {issueEnvironmentId === null ? null : (
-        <>
-          <IssueCreateDialog
-            open={creating}
-            onOpenChange={setCreating}
-            environmentId={issueEnvironmentId}
-            projects={scopedProjects}
-            projectId={scopedProjectId}
-            // Filed and then read: the new issue opens in the panel, and the list it was filed
-            // from is a row out of date until the hosts are asked again.
-            onCreated={(created) => {
-              if (rightPanelRef !== null) {
-                useRightPanelStore.getState().openIssue(rightPanelRef, created);
-              }
-              updateSearch(issueSelectionSearchPatch(created));
-              refreshList();
-              baselineQuery.refresh();
-              authoredQuery.refresh();
-              assignedQuery.refresh();
-            }}
-          />
-        </>
-      )}
     </SidebarInset>
+  );
+}
+
+export function NewIssueControl(
+  props: Omit<ComponentProps<typeof IssueCreateDialog>, "open" | "onOpenChange">,
+) {
+  const [open, setOpen] = useState(false);
+  const allowed = useAtomValue(issueEnvironment.create.permissionAtom(props.environmentId));
+  return (
+    <>
+      <Button variant="outline" disabled={!allowed} onClick={() => setOpen(true)}>
+        <PlusIcon aria-hidden className="size-4" />
+        New issue
+      </Button>
+      <IssueCreateDialog {...props} open={open} onOpenChange={setOpen} />
+    </>
   );
 }
 
@@ -1777,6 +1853,7 @@ export function IssuesColumn({
   onHost,
   searchInput,
   filtersMenu,
+  newIssueControl = null,
   rightPanelControl,
   titlebarControls = null,
   rightPanelOpen,
@@ -1795,6 +1872,7 @@ export function IssuesColumn({
   onHost: (host: string | undefined) => void;
   searchInput: ReactNode;
   filtersMenu: ReactNode;
+  newIssueControl?: ReactNode;
   rightPanelControl: ReactNode;
   titlebarControls?: ReactNode;
   rightPanelOpen: boolean;
@@ -1948,6 +2026,7 @@ export function IssuesColumn({
                   onRefresh={onRefresh}
                 />
               ) : null}
+              {newIssueControl}
             </div>
             {/* Scrolled past this marker, the controls are gone and the title takes over. */}
             <div ref={markerRef} aria-hidden className="-mt-3 h-px w-full" />

@@ -8,8 +8,8 @@ import type {
   PullRequestViewerPermissions,
 } from "@t3tools/contracts";
 
-import * as GitHubCli from "../sourceControl/GitHubCli.ts";
-import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
+import * as GitHubApi from "../sourceControl/GitHubApi.ts";
+import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import {
   PullRequestProviderError,
   type PullRequestProviderFailure,
@@ -20,6 +20,7 @@ import {
 } from "./PullRequestProvider.ts";
 import type { GitHubViewerAccess, GitHubWorkflowRunApproval } from "./gitHubPullRequestJson.ts";
 import {
+  CITED_ISSUE_REFERENCES_MAX,
   mergeIssueLinks,
   parseIssueReferences,
   unlinkedIssueReferences,
@@ -110,7 +111,7 @@ export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequest
 
 /** The tags that mean GitHub is out of reach for this account, rather than one request failing. */
 export function gitHubProviderFailure(
-  error: GitHubPullRequestCli.GitHubPullRequestCliError,
+  error: GitHubPullRequestApi.GitHubPullRequestApiError,
 ): PullRequestProviderFailure {
   switch (error._tag) {
     case "GitHubCliMissingError":
@@ -203,9 +204,9 @@ const rendersEmpty = (body: string): boolean =>
   body.replace(/<!--[\s\S]*?-->/g, "").trim().length === 0;
 
 export const make = Effect.gen(function* () {
-  const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+  const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
-  const fail = (operation: string) => (error: GitHubPullRequestCli.GitHubPullRequestCliError) =>
+  const fail = (operation: string) => (error: GitHubPullRequestApi.GitHubPullRequestApiError) =>
     new PullRequestProviderError({
       provider: "github",
       operation,
@@ -227,7 +228,10 @@ export const make = Effect.gen(function* () {
     input: { readonly cwd: string; readonly repository: string; readonly host: string },
     pullRequest: { readonly title: string; readonly body: string },
     hostLinks: ReadonlyArray<IssueLink>,
-  ): Effect.Effect<{ readonly links: ReadonlyArray<IssueLink>; readonly truncated: boolean }> => {
+  ): Effect.Effect<
+    { readonly links: ReadonlyArray<IssueLink>; readonly truncated: boolean },
+    GitHubPullRequestApi.GitHubPullRequestApiError
+  > => {
     const references = unlinkedIssueReferences(
       parseIssueReferences({
         kind: "github",
@@ -240,10 +244,24 @@ export const make = Effect.gen(function* () {
     );
     return references.length === 0
       ? Effect.succeed({ links: [], truncated: false })
-      : cli.listCitedIssues({ cwd: input.cwd, host: input.host, references }).pipe(
-          Effect.map((links) => ({ links, truncated: false })),
-          Effect.orElseSucceed(() => ({ links: [], truncated: true })),
-        );
+      : cli
+          .listCitedIssues({
+            cwd: input.cwd,
+            host: input.host,
+            references: references.slice(0, CITED_ISSUE_REFERENCES_MAX),
+          })
+          .pipe(
+            Effect.map((links) => ({
+              links,
+              truncated: references.length > CITED_ISSUE_REFERENCES_MAX,
+            })),
+            Effect.catchIf(
+              (error) =>
+                error._tag !== "GitHubApiRateLimitError" &&
+                error._tag !== "SourceControlRateLimitPausedError",
+              () => Effect.succeed({ links: [], truncated: true }),
+            ),
+          );
   };
 
   const readChecks = (input: ProviderRepositoryRef & { readonly number: number }) =>
@@ -327,7 +345,6 @@ export const make = Effect.gen(function* () {
           filters: input.filters,
         })
         .pipe(
-          Effect.mapError(fail("listChangeRequests")),
           Effect.flatMap((page) =>
             cli
               .listActorAvatars({
@@ -339,7 +356,12 @@ export const make = Effect.gen(function* () {
               // A listing without faces is still a listing, so a failed lookup falls back to
               // the initials rather than taking the rows down with it.
               .pipe(
-                Effect.orElseSucceed(() => new Map<string, string>()),
+                Effect.catchIf(
+                  (error) =>
+                    error._tag !== "GitHubApiRateLimitError" &&
+                    error._tag !== "SourceControlRateLimitPausedError",
+                  () => Effect.succeed(new Map<string, string>()),
+                ),
                 Effect.map((avatarsByLogin) => ({
                   ...page,
                   items: page.items.map((item) => ({
@@ -349,6 +371,7 @@ export const make = Effect.gen(function* () {
                 })),
               ),
           ),
+          Effect.mapError(fail("listChangeRequests")),
         ),
 
     /**
@@ -420,13 +443,18 @@ export const make = Effect.gen(function* () {
         Effect.mapError(fail("getChangeRequestChecks")),
       ),
 
-    getChangeRequest: (input) =>
-      Effect.all(
+    getChangeRequest: (input) => {
+      const linkedIssues = Effect.catchIf(
+        cli.listLinkedIssues(input),
+        (error) =>
+          error._tag !== "GitHubApiRateLimitError" &&
+          error._tag !== "SourceControlRateLimitPausedError",
+        () => Effect.succeed({ links: [], truncated: true }),
+      );
+      return Effect.all(
         {
           pullRequest: readChecks(input),
-          linkedIssues: cli
-            .listLinkedIssues(input)
-            .pipe(Effect.orElseSucceed(() => ({ links: [], truncated: true }))),
+          linkedIssues,
         },
         { concurrency: 2 },
       ).pipe(
@@ -459,39 +487,42 @@ export const make = Effect.gen(function* () {
           ),
         ),
         Effect.mapError(fail("getChangeRequest")),
-      ),
+      );
+    },
 
-    getChangeRequestActivity: (input) =>
-      Effect.all(
-        [
-          cli.getPullRequestActivity(input),
-          // Line comments live on review threads, which `gh pr view --json` cannot reach. A
-          // GraphQL hiccup degrades to a truncated conversation rather than blanking activity.
-          cli.listReviewThreadComments(input).pipe(
-            Effect.orElseSucceed(() => ({
-              comments: [],
-              dismissalsByReviewId: new Map<string, string>(),
-              reactions: [],
-              reactionsById: new Map<string, ReadonlyArray<PullRequestReaction>>(),
-              editedAtById: new Map<string, string>(),
-              reviewThreads: [],
-              commentCount: 0,
-              truncated: true,
-              reviewThreadsTruncated: true,
-              reviewers: [],
-              avatarsByLogin: new Map<string, string>(),
-              botLogins: new Set<string>(),
-              commitStats: new Map<
-                string,
-                { readonly additions: number; readonly deletions: number }
-              >(),
-              commits: [],
-              viewer: { canUpdate: true, didAuthor: false },
-            })),
-          ),
-        ],
-        { concurrency: 2 },
-      ).pipe(
+    getChangeRequestActivity: (input) => {
+      // Line comments live on review threads, which `gh pr view --json` cannot reach. A
+      // GraphQL hiccup degrades to a truncated conversation rather than blanking activity.
+      const reviewThreads = Effect.catchIf(
+        cli.listReviewThreadComments(input),
+        (error) =>
+          error._tag !== "GitHubApiRateLimitError" &&
+          error._tag !== "SourceControlRateLimitPausedError",
+        () =>
+          Effect.succeed({
+            comments: [],
+            dismissalsByReviewId: new Map<string, string>(),
+            reactions: [],
+            reactionsById: new Map<string, ReadonlyArray<PullRequestReaction>>(),
+            editedAtById: new Map<string, string>(),
+            reviewThreads: [],
+            commentCount: 0,
+            truncated: true,
+            reviewThreadsTruncated: true,
+            reviewers: [],
+            avatarsByLogin: new Map<string, string>(),
+            botLogins: new Set<string>(),
+            commitStats: new Map<
+              string,
+              { readonly additions: number; readonly deletions: number }
+            >(),
+            commits: [],
+            viewer: { canUpdate: true, didAuthor: false },
+          }),
+      );
+      return Effect.all([cli.getPullRequestActivity(input), reviewThreads], {
+        concurrency: 2,
+      }).pipe(
         Effect.mapError(fail("getChangeRequestActivity")),
         Effect.map(([pullRequest, reviewThreads]): ProviderChangeRequestActivity => ({
           author: withAvatar(
@@ -561,7 +592,8 @@ export const make = Effect.gen(function* () {
             })),
           })),
         })),
-      ),
+      );
+    },
 
     getReviewThreadComments: (input) =>
       cli.getReviewThreadComments(input).pipe(Effect.mapError(fail("getReviewThreadComments"))),
@@ -577,7 +609,7 @@ export const make = Effect.gen(function* () {
       // comparison, so one read usually answers what used to take three. When that heavier read
       // fails, the light access read still answers, withholding only update-branch.
       return cli.getPullRequestDetail(input).pipe(
-        Effect.provideService(GitHubCli.AllowGitHubReserve, true),
+        Effect.provideService(GitHubApi.AllowGitHubReserve, true),
         Effect.map((pullRequest) =>
           gitHubViewerPermissions({
             ...pullRequest.viewerAccess,

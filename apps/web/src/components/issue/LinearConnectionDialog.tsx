@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useState } from "react";
 
@@ -29,6 +30,7 @@ export function LinearConnectionDialog({
   onConnected: () => void;
 }) {
   const connect = useAtomCommand(issueTrackingEnvironment.connect, { reportFailure: false });
+  const canConnect = useAtomValue(issueTrackingEnvironment.connect.permissionAtom(environmentId));
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +60,7 @@ export function LinearConnectionDialog({
             className="space-y-3"
             onSubmit={async (event) => {
               event.preventDefault();
-              if (busy || token.trim().length === 0) return;
+              if (busy || !canConnect || token.trim().length === 0) return;
               setBusy(true);
               setError(null);
               const result = await connect({
@@ -102,7 +104,7 @@ export function LinearConnectionDialog({
           <Button
             type="submit"
             form="linear-connect-form"
-            disabled={busy || token.trim().length === 0}
+            disabled={busy || !canConnect || token.trim().length === 0}
           >
             {busy ? "Adding…" : "Add account"}
           </Button>

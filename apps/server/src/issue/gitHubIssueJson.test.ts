@@ -256,6 +256,53 @@ describe("issue search decoding", () => {
 });
 
 describe("issue supplement decoding", () => {
+  it("uses the same closing, connection and mention mapping on relatives", () => {
+    const relative = {
+      number: 7,
+      title: "Parent",
+      url: "https://github.com/acme/api/issues/7",
+      state: "CLOSED",
+      repository: { nameWithOwner: "acme/api" },
+      closedByPullRequestsReferences: { nodes: [pullRequestRef(12, { state: "MERGED" })] },
+      timelineItems: {
+        nodes: [
+          { __typename: "ConnectedEvent", subject: pullRequestRef(13) },
+          { __typename: "DisconnectedEvent", subject: pullRequestRef(13) },
+          { __typename: "ConnectedEvent", subject: pullRequestRef(14) },
+          { __typename: "CrossReferencedEvent", source: pullRequestRef(12) },
+          { __typename: "CrossReferencedEvent", source: pullRequestRef(14) },
+          {
+            __typename: "CrossReferencedEvent",
+            source: pullRequestRef(14, {
+              repository: { nameWithOwner: "acme/api" },
+              url: "https://github.com/acme/api/pull/14",
+            }),
+          },
+        ],
+      },
+    };
+    const issue = expectSuccess(
+      decodeIssueSupplementJson(
+        supplementJson({
+          issue: {
+            parent: relative,
+            subIssues: { nodes: [null, relative] },
+          },
+        }),
+      ),
+    );
+    const links = issue.ancestors[0]?.linkedPullRequests;
+    expect(
+      links?.map((link) => [link.repository, link.number, link.closesIssue, link.state]),
+    ).toEqual([
+      ["acme/web", 12, true, "merged"],
+      ["acme/web", 14, true, "open"],
+      ["acme/api", 14, false, "open"],
+    ]);
+    expect(issue.subIssues).toHaveLength(1);
+    expect(issue.subIssues[0]?.linkedPullRequests).toEqual(links);
+  });
+
   it("grants labelling and assigning to a role that has them, and to no other", () => {
     const triage = expectSuccess(
       decodeIssueSupplementJson(supplementJson({ viewerPermission: "TRIAGE" })),

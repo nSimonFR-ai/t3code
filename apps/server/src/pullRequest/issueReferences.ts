@@ -1,4 +1,5 @@
 import type { IssueLink } from "@t3tools/contracts";
+import { fromMarkdown } from "mdast-util-from-markdown";
 
 /**
  * An issue a change request's own words name. Nothing has checked that it exists yet, which is
@@ -39,26 +40,29 @@ const URL_TOKEN = /https?:\/\/\S+/giu;
 /** `/owner/repo/issues/12`, and GitLab's `/group/project/-/issues/12`. */
 const ISSUE_PATH = /^\/(.+?)\/(?:-\/)?issues\/(\d{1,9})$/u;
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})/u;
-
 /**
  * The prose alone. A reference inside a fence or an inline span is being shown rather than made,
  * and an unclosed fence runs to the end of the text the way every Markdown reader treats it.
  */
 function withoutCode(markdown: string): string {
-  const lines: string[] = [];
-  let fence: string | null = null;
-  for (const line of markdown.split("\n")) {
-    const marker = FENCE.exec(line)?.[1];
-    if (fence !== null) {
-      if (marker !== undefined && marker.startsWith(fence)) fence = null;
-      lines.push("");
-      continue;
+  const prose: string[] = [];
+  const nodes = fromMarkdown(markdown).children.toReversed();
+  let offset = 0;
+  while (nodes.length > 0) {
+    const node = nodes.pop()!;
+    if (node.type === "code" || node.type === "inlineCode") {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      if (start !== undefined && end !== undefined) {
+        prose.push(markdown.slice(offset, start), " ");
+        offset = end;
+      }
+    } else if ("children" in node) {
+      nodes.push(...node.children.toReversed());
     }
-    if (marker !== undefined) fence = marker;
-    lines.push(marker === undefined ? line : "");
   }
-  return lines.join("\n").replace(/(`+)[^`]*\1/gu, " ");
+  prose.push(markdown.slice(offset));
+  return prose.join("");
 }
 
 function referenceKey(reference: { readonly repository: string; readonly number: number }): string {
@@ -114,7 +118,7 @@ export function parseIssueReferences(
       add(toReference(source, match[1], Number(match[2])));
     }
   }
-  return [...found.values()].filter(include).slice(0, CITED_ISSUE_REFERENCES_MAX);
+  return [...found.values()].filter(include);
 }
 
 /** The references the host said nothing about, which are the only ones worth a lookup. */

@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentId,
   ProjectId,
@@ -125,6 +126,7 @@ export function workItemMatchCacheKey(input: WorkItemMatchCacheInput): string {
 
 export function useWorkItemMatches(input: WorkItemMatchCacheInput) {
   const run = useAtomCommand(findWorkItemMatches, { reportFailure: false });
+  const allowed = useAtomValue(findWorkItemMatches.permissionAtom(input.environmentId));
   const key = workItemMatchCacheKey(input);
   const currentKey = useRef(key);
   useLayoutEffect(() => {
@@ -134,7 +136,7 @@ export function useWorkItemMatches(input: WorkItemMatchCacheInput) {
   const [pending, setPending] = useState<WorkItemMatchRelationship | null>(null);
   const find = useCallback(
     async (relationship: WorkItemMatchRelationship) => {
-      if (pending !== null) return;
+      if (pending !== null || !allowed) return;
       setPending(relationship);
       const response = await run({
         environmentId: input.environmentId,
@@ -157,8 +159,8 @@ export function useWorkItemMatches(input: WorkItemMatchCacheInput) {
         [relationship]: response.value.matches,
       }));
     },
-    [input.environmentId, input.projectId, input.source, key, pending, run],
+    [allowed, input.environmentId, input.projectId, input.source, key, pending, run],
   );
   const current = cache.key === key ? cache : { key };
-  return { find, pending, related: current.related, duplicate: current.duplicate };
+  return { allowed, find, pending, related: current.related, duplicate: current.duplicate };
 }

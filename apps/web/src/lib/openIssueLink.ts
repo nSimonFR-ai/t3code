@@ -1,5 +1,6 @@
 import { sourceControlHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
 import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
+import { canonicalRepositoryKey } from "@t3tools/shared/sourceControl";
 
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { readLocalApi } from "../localApi";
@@ -26,18 +27,21 @@ export function findProjectForIssue(
     if (!identity) return false;
     const kind = identity.provider as SourceControlProviderKind | undefined;
     if (kind === undefined) return false;
+    if (kind === "azure-devops") {
+      const checkout = `${canonicalRepositoryKey(identity.canonicalKey.toLowerCase())}/`;
+      const linkKey = `${link.host}/${link.repository}`.toLowerCase();
+      return [
+        canonicalRepositoryKey(linkKey),
+        canonicalRepositoryKey(`${linkKey}/_git/_`).slice(0, -"/_git/_".length),
+      ].some((prefix) => checkout.startsWith(`${prefix}/`));
+    }
     const repository =
       identity.displayName ??
       (identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null);
     if (repository === null || sourceControlHostOf(identity, kind) !== link.host.toLowerCase()) {
       return false;
     }
-    const lowerRepository = repository.toLowerCase();
-    const linkRepository = link.repository.toLowerCase();
-    return (
-      lowerRepository === linkRepository ||
-      (kind === "azure-devops" && lowerRepository.startsWith(`${linkRepository}/`))
-    );
+    return repository.toLowerCase() === link.repository.toLowerCase();
   });
 }
 
@@ -80,6 +84,33 @@ export function findProjectForLink(
     return undefined;
   }
   return findProjectForIssue(projects, { host, repository: link.repository });
+}
+
+export function relatedIssueTarget(
+  projects: ReadonlyArray<EnvironmentProject>,
+  current: { readonly projectId: string; readonly repository: string },
+  relative: {
+    readonly repository?: string | undefined;
+    readonly number: number;
+    readonly url: string;
+  },
+): { projectId: string; repository: string; number: number } | null {
+  const repository = relative.repository;
+  if (repository === undefined || repository.toLowerCase() === current.repository.toLowerCase()) {
+    return {
+      projectId: current.projectId,
+      repository: current.repository,
+      number: relative.number,
+    };
+  }
+  const project = findProjectForLink(projects, { ...relative, repository });
+  return project === undefined
+    ? null
+    : {
+        projectId: project.id,
+        repository: repositoryForProjectLink(project, repository),
+        number: relative.number,
+      };
 }
 
 /**

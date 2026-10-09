@@ -5,8 +5,13 @@ import { afterEach, expect, it, vi } from "vite-plus/test";
 import { IssueEditor, IssueSummaryTab } from "./IssueSummaryTab";
 import { ComposerPromptEditor } from "../ComposerPromptEditor";
 
-const { update, navigate } = vi.hoisted(() => ({ update: vi.fn(), navigate: vi.fn() }));
+const { update, navigate, permission } = vi.hoisted(() => ({
+  update: vi.fn(),
+  navigate: vi.fn(),
+  permission: { allowed: true },
+}));
 let linkedThreadShells: Array<Record<string, unknown>> = [];
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => permission.allowed }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => navigate }));
 vi.mock("~/state/entities", () => ({
   useThreadShellsForProjectRefs: () => linkedThreadShells,
@@ -50,6 +55,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   linkedThreadShells = [];
+  permission.allowed = true;
 });
 
 const coreDetail: IssueDetail = {
@@ -190,6 +196,57 @@ it("edits the title without changing the description", async () => {
   });
 });
 
+it.each(["title", "description"] as const)(
+  "keeps the %s draft but blocks saving while write access is revoked",
+  async (field) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    update.mockResolvedValue({ _tag: "Success" });
+    const editorProps = {
+      environmentId: props.environmentId,
+      detail,
+      field,
+      onDone: vi.fn(),
+      onSaved: vi.fn(),
+    };
+    await act(() => {
+      renderer = create(<IssueEditor {...editorProps} />);
+    });
+    const label = field === "title" ? "Issue title" : "Issue description";
+    const input = () => renderer.root.findByProps({ "aria-label": label });
+    const save = () =>
+      renderer.root.findAllByType("button").find((button) => button.children.includes("Save"))!;
+    const submitWithKeyboard = () =>
+      field === "title"
+        ? input().props.onKeyDown({
+            key: "Enter",
+            nativeEvent: { isComposing: false },
+            preventDefault: vi.fn(),
+            stopPropagation: vi.fn(),
+          })
+        : renderer.root
+            .findByType(ComposerPromptEditor)
+            .props.onCommandKeyDown("Enter", { metaKey: true, ctrlKey: false });
+    await act(() => input().props.onChange({ target: { value: "Draft" } }));
+
+    permission.allowed = false;
+    await act(() => renderer.update(<IssueEditor {...editorProps} />));
+    expect(save().props.disabled).toBe(true);
+    await act(() => submitWithKeyboard());
+    await act(() => save().props.onClick());
+    expect(update).not.toHaveBeenCalled();
+    expect(input().props.value).toBe("Draft");
+
+    permission.allowed = true;
+    await act(() => renderer.update(<IssueEditor {...editorProps} />));
+    expect(save().props.disabled).toBe(false);
+    await act(() => submitWithKeyboard());
+    expect(update).toHaveBeenCalledWith({
+      environmentId: props.environmentId,
+      input: { ...props.reference, [field === "title" ? "title" : "body"]: "Draft" },
+    });
+  },
+);
+
 it("names the comment order toggle by its visible state", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   await act(() => {
@@ -270,4 +327,43 @@ it("shows only threads linked to this issue and opens the matching thread", asyn
   linkedThreadShells = [];
   await act(() => renderer.update(<IssueSummaryTab {...props} editing={false} />));
   expect(renderer.root.findAllByProps({ title: "Linked threads" })).toHaveLength(0);
+});
+
+it("keeps same-numbered pull requests from different hosts as separate rows", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const consoleError = vi.spyOn(console, "error");
+  const pullRequest = (url: string, title: string) => ({
+    repository: "acme/project",
+    number: 7,
+    title,
+    url,
+    state: "open" as const,
+    isDraft: false,
+    closesIssue: false,
+  });
+  const github = pullRequest("https://github.com/acme/project/pull/7", "GitHub change");
+  const gitlab = pullRequest("https://gitlab.com/acme/project/-/merge_requests/7", "GitLab change");
+  const withLinks = (linkedPullRequests: IssueDetailView["linkedPullRequests"]) => ({
+    ...detail,
+    capabilities: { ...detail.capabilities, linkedPullRequests: true },
+    linkedPullRequests,
+  });
+  const rows = () =>
+    renderer.root
+      .findAllByType("button")
+      .filter((button) => button.findAllByProps({ role: "img" }).length > 0);
+  await act(() => {
+    renderer = create(
+      <IssueSummaryTab {...props} editing={false} detail={withLinks([github, gitlab])} />,
+    );
+  });
+  await act(() =>
+    renderer.update(
+      <IssueSummaryTab {...props} editing={false} detail={withLinks([gitlab, github])} />,
+    ),
+  );
+  for (const row of rows()) await act(() => row.props.onClick());
+  expect(props.onOpenLinkedPullRequest).toHaveBeenNthCalledWith(1, gitlab);
+  expect(props.onOpenLinkedPullRequest).toHaveBeenNthCalledWith(2, github);
+  expect(consoleError.mock.calls.flat().join("\n")).not.toContain("same key");
 });

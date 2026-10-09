@@ -130,6 +130,123 @@ describe("WorkItemMatches", () => {
     ),
   );
 
+  it.effect.each(["github", "gitlab"])(
+    "excludes a Linear issue's known $0 pull request before reading candidates or generating matches",
+    (provider) =>
+      Effect.gen(function* () {
+        const pullRequest = {
+          ...item(2),
+          provider,
+          url:
+            provider === "github"
+              ? "https://github.com/acme/app/pull/2"
+              : "https://gitlab.com/acme/app/-/merge_requests/2",
+        };
+        const service = yield* WorkItemMatches.WorkItemMatches.pipe(
+          Effect.provide(
+            WorkItemMatches.layer.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  dependencies,
+                  Layer.mock(IssueService.IssueService)({
+                    detail: () =>
+                      Effect.succeed({
+                        ...detail(1),
+                        provider: "linear",
+                        linkedPullRequests: [
+                          { ...pullRequest, url: `${pullRequest.url}#discussion` },
+                        ],
+                      } as unknown as IssueDetail),
+                  }),
+                  Layer.mock(PullRequestService.PullRequestService)({
+                    list: () =>
+                      Effect.succeed({
+                        entries: [pullRequest],
+                      } as unknown as PullRequestListResult),
+                    detail: () => Effect.die("Must not read a known pull request"),
+                  }),
+                  Layer.mock(TextGeneration.TextGeneration)({
+                    findWorkItemMatches: () =>
+                      Effect.die("Must not generate for a known pull request"),
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+        expect(
+          yield* service.find({
+            projectId,
+            relationship: "related",
+            source: { kind: "issue", provider: "linear", repository: "ENG", number: 1 },
+          }),
+        ).toEqual({ matches: [] });
+      }),
+  );
+
+  it.effect(
+    "keeps pull requests with the same repository and number on other hosts or providers",
+    () =>
+      Effect.gen(function* () {
+        const known = { ...item(2), url: "https://github.com/acme/app/pull/2" };
+        const candidates = [
+          {
+            ...known,
+            projectId: ProjectId.make("enterprise-project"),
+            url: "https://github.example.com/acme/app/pull/2",
+          },
+          {
+            ...known,
+            projectId: ProjectId.make("gitlab-project"),
+            provider: "gitlab",
+            url: "https://gitlab.com/acme/app/-/merge_requests/2",
+          },
+        ];
+        const service = yield* WorkItemMatches.WorkItemMatches.pipe(
+          Effect.provide(
+            WorkItemMatches.layer.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  dependencies,
+                  Layer.mock(IssueService.IssueService)({
+                    detail: () =>
+                      Effect.succeed({
+                        ...detail(1),
+                        linkedPullRequests: [known],
+                      } as unknown as IssueDetail),
+                  }),
+                  Layer.mock(PullRequestService.PullRequestService)({
+                    list: () =>
+                      Effect.succeed({ entries: candidates } as unknown as PullRequestListResult),
+                    detail: ({ projectId: candidateProjectId }) =>
+                      Effect.succeed({
+                        ...detail(2),
+                        ...candidates.find(
+                          (candidate) => candidate.projectId === candidateProjectId,
+                        ),
+                      } as unknown as PullRequestDetail),
+                  }),
+                  Layer.mock(TextGeneration.TextGeneration)({
+                    findWorkItemMatches: (input) => {
+                      expect(input.candidates.map((candidate) => candidate.url)).toEqual(
+                        candidates.map((candidate) => candidate.url),
+                      );
+                      return Effect.succeed({ matches: [] });
+                    },
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+        yield* service.find({
+          projectId,
+          relationship: "related",
+          source: { ...item(1), kind: "issue" },
+        });
+      }),
+  );
+
   it.effect.each(["read-source", "list-candidates", "read-candidate", "generate"] as const)(
     "preserves the underlying $0 failure",
     (stage) =>

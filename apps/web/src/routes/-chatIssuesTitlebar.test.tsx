@@ -1,4 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import { SettingsIcon } from "lucide-react";
 import type { IssueListEntry, IssueTrackerProjectBinding, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -12,9 +18,12 @@ import {
   CompactFilterMenu,
   hasLinearManagementState,
   issueSelectionSearchPatch,
+  type IssuesSearch,
   isIssueEntryOpen,
   IssuesColumn,
   mergeIssueProviderSummaries,
+  patchIssuesSearch,
+  Route,
   stabilizeLinearProviderSummary,
 } from "./_chat.issues";
 
@@ -45,6 +54,52 @@ describe("IssuesColumn", () => {
         number: 1,
       }),
     ).toMatchObject({ selectedProvider: undefined });
+  });
+
+  it("keeps the label filter while searching, opening an issue, and clearing the selection", async () => {
+    const root = createRootRoute();
+    const issues = createRoute({
+      getParentRoute: () => root,
+      path: "issues",
+      validateSearch: Route.options.validateSearch,
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([issues]),
+      history: createMemoryHistory({ initialEntries: ["/issues?label=bug"] }),
+    });
+    await router.load();
+    const update = (patch: Parameters<typeof patchIssuesSearch>[1]) =>
+      router.navigate({
+        to: "/issues",
+        search: patchIssuesSearch(router.state.location.search as IssuesSearch, patch),
+        replace: true,
+      });
+
+    await update({ q: "crash" });
+    await update(
+      issueSelectionSearchPatch({
+        projectId: "project_1" as ProjectId,
+        repository: "pingdotgg/t3code",
+        number: 12,
+      }),
+    );
+    expect(router.state.location.search).toMatchObject({
+      label: "bug",
+      q: "crash",
+      repository: "pingdotgg/t3code",
+      number: 12,
+    });
+
+    await update({ repository: undefined, number: undefined, selectedProjectId: undefined });
+    expect(router.state.location.search).toEqual({
+      involvement: "all",
+      state: "open",
+      label: "bug",
+      q: "crash",
+    });
+
+    await update({ label: undefined });
+    expect(router.state.location.search).not.toHaveProperty("label");
   });
 
   it("keeps refresh beside list filters without a selection-mode control", () => {

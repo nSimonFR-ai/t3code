@@ -12,6 +12,7 @@ import {
   findProjectForLink,
   linkedPullRequestTarget,
   openLinkInBrowser,
+  relatedIssueTarget,
   repositoryForProjectLink,
 } from "./openIssueLink";
 
@@ -117,6 +118,53 @@ describe("findProjectForLink", () => {
     ).toBe(projects[0]);
   });
 
+  it.each([
+    [
+      "acme.visualstudio.com/platform/_git/t3code",
+      "platform/_git/t3code",
+      "https://dev.azure.com/acme/platform/_workitems/edit/17",
+      "acme/platform",
+    ],
+    [
+      "dev.azure.com/acme/platform/_git/t3code",
+      "acme/platform/_git/t3code",
+      "https://acme.visualstudio.com/platform/_workitems/edit/17",
+      "platform",
+    ],
+    [
+      "dev.azure.com/acme/platform/_git/t3code",
+      "acme/platform/_git/t3code",
+      "https://acme.visualstudio.com/DefaultCollection/platform/_workitems/edit/17",
+      "DefaultCollection/platform",
+    ],
+    [
+      "acme.visualstudio.com/platform/_git/t3code",
+      "platform/_git/t3code",
+      "https://dev.azure.com/acme/platform/_git/t3code/pullrequest/17",
+      "acme/platform/_git/t3code",
+    ],
+    [
+      "dev.azure.com/acme/platform/_git/t3code",
+      "acme/platform/_git/t3code",
+      "https://acme.visualstudio.com/platform/_git/t3code/pullrequest/17",
+      "platform/_git/t3code",
+    ],
+  ])(
+    "matches an Azure DevOps checkout at %s (%s) to %s",
+    (canonicalKey, displayName, url, repository) => {
+      const checkout = project({ canonicalKey, provider: "azure-devops", displayName });
+      const other = project({
+        canonicalKey: canonicalKey.replace("acme", "globex"),
+        provider: "azure-devops",
+        displayName: displayName.replace("acme", "globex"),
+      });
+      const match = findProjectForLink([checkout], { repository, number: 17, url });
+      expect(match).toBe(checkout);
+      expect(repositoryForProjectLink(match!, repository)).toBe(displayName);
+      expect(findProjectForLink([other], { repository, number: 17, url })).toBeUndefined();
+    },
+  );
+
   it("does not let a nested GitLab project claim an issue filed on the group above it", () => {
     // Only an Azure DevOps work item names a path above the repository. A GitLab link names the
     // whole project path, so `group/repo` is a different repository from `group/repo/subrepo`.
@@ -184,5 +232,66 @@ describe("linkedPullRequestTarget", () => {
         number: 7,
       }),
     );
+  });
+});
+
+describe("relatedIssueTarget", () => {
+  const projects = [
+    {
+      id: "api",
+      repositoryIdentity: {
+        canonicalKey: "github.com/acme/api",
+        provider: "github",
+        displayName: "Acme/API",
+      },
+    },
+  ] as never;
+  const current = { projectId: "web", repository: "acme/web" };
+
+  it("keeps the current project for same-repository and Linear relatives", () => {
+    expect(
+      relatedIssueTarget(projects, current, {
+        repository: "Acme/Web",
+        number: 2,
+        url: "https://github.com/acme/web/issues/2",
+      }),
+    ).toEqual({ projectId: "web", repository: "acme/web", number: 2 });
+    expect(
+      relatedIssueTarget(
+        projects,
+        { projectId: "web", repository: "ENG" },
+        {
+          number: 3,
+          url: "https://linear.app/acme/issue/ENG-3",
+        },
+      ),
+    ).toEqual({ projectId: "web", repository: "ENG", number: 3 });
+  });
+
+  it("does not open another Linear team's issue through this team's project", () => {
+    expect(
+      relatedIssueTarget(
+        projects,
+        { projectId: "web", repository: "ENG" },
+        { repository: "OPS", number: 42, url: "https://linear.app/acme/issue/OPS-42" },
+      ),
+    ).toBeNull();
+  });
+
+  it("opens another repository through its own project, or not at all", () => {
+    expect(
+      relatedIssueTarget(projects, current, {
+        repository: "acme/api",
+        number: 9,
+        url: "https://github.com/acme/api/issues/9",
+      }),
+    ).toEqual({ projectId: "api", repository: "Acme/API", number: 9 });
+    expect(
+      relatedIssueTarget(projects, current, {
+        repository: "acme/docs",
+        number: 9,
+        url: "https://github.com/acme/docs/issues/9",
+      }),
+    ).toBeNull();
   });
 });

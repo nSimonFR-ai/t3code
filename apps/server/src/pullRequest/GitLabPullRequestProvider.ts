@@ -8,6 +8,7 @@ import type {
 
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import {
+  CITED_ISSUE_REFERENCES_MAX,
   mergeIssueLinks,
   parseIssueReferences,
   unlinkedIssueReferences,
@@ -137,7 +138,10 @@ export const make = Effect.gen(function* () {
     input: { readonly cwd: string; readonly repository: string; readonly host: string },
     mergeRequest: { readonly title: string; readonly body: string },
     hostLinks: ReadonlyArray<IssueLink>,
-  ): Effect.Effect<ReadonlyArray<IssueLink>> => {
+  ): Effect.Effect<
+    { readonly links: ReadonlyArray<IssueLink>; readonly truncated: boolean },
+    GitLabPullRequestCli.GitLabPullRequestCliError
+  > => {
     const project = input.repository.trim().toLowerCase();
     const numbers = unlinkedIssueReferences(
       parseIssueReferences(
@@ -153,10 +157,23 @@ export const make = Effect.gen(function* () {
       hostLinks,
     ).map((reference) => reference.number);
     return numbers.length === 0
-      ? Effect.succeed([])
+      ? Effect.succeed({ links: [], truncated: false })
       : cli
-          .listCitedIssues({ cwd: input.cwd, repository: input.repository, numbers })
-          .pipe(Effect.orElseSucceed((): ReadonlyArray<IssueLink> => []));
+          .listCitedIssues({
+            cwd: input.cwd,
+            repository: input.repository,
+            numbers: numbers.slice(0, CITED_ISSUE_REFERENCES_MAX),
+          })
+          .pipe(
+            Effect.map((links) => ({
+              links,
+              truncated: numbers.length > CITED_ISSUE_REFERENCES_MAX,
+            })),
+            Effect.catchIf(
+              (error) => gitLabProviderFailure(error).reason !== "rate-limited",
+              () => Effect.succeed({ links: [], truncated: true }),
+            ),
+          );
   };
 
   const provider: PullRequestProviderApi = {
@@ -191,31 +208,30 @@ export const make = Effect.gen(function* () {
         Effect.mapError(fail("getChangeRequestChecks")),
       ),
 
-    getChangeRequest: (input) =>
-      Effect.all(
+    getChangeRequest: (input) => {
+      const linkedIssues = Effect.catchIf(
+        cli.listLinkedIssues(input),
+        (error) => gitLabProviderFailure(error).reason !== "rate-limited",
+        () => Effect.succeed({ links: [] as ReadonlyArray<IssueLink>, truncated: true }),
+      );
+      return Effect.all(
         [
           cli.getMergeRequestDetail(input),
           cli.getProjectMergeCapabilities({ cwd: input.cwd, repository: input.repository }),
           // A section of links is worth less than the merge request it hangs off, so a project
           // whose issues this account cannot read leaves it empty rather than failing the detail.
-          cli.listLinkedIssues(input).pipe(
-            Effect.orElseSucceed(() => ({
-              links: [] as ReadonlyArray<IssueLink>,
-              truncated: true,
-            })),
-          ),
+          linkedIssues,
         ],
         { concurrency: 3 },
       ).pipe(
-        Effect.mapError(fail("getChangeRequest")),
         Effect.flatMap(([mergeRequest, mergeCapabilities, linkedIssues]) =>
           citedIssues(input, mergeRequest, linkedIssues.links).pipe(
             Effect.map((cited): ProviderChangeRequestDetail => ({
               ...mergeRequest,
               mergeCapabilities,
               viewerPermissions: gitLabViewerPermissions(mergeRequest),
-              linkedIssues: mergeIssueLinks(linkedIssues.links, cited),
-              linkedIssuesTruncated: linkedIssues.truncated,
+              linkedIssues: mergeIssueLinks(linkedIssues.links, cited.links),
+              linkedIssuesTruncated: linkedIssues.truncated || cited.truncated,
               // A GitLab too old to count the divergence says nothing here rather than "up to
               // date": the banner is worth missing, and a wrong all-clear is not worth showing.
               baseComparison:
@@ -230,26 +246,43 @@ export const make = Effect.gen(function* () {
             })),
           ),
         ),
-      ),
+        Effect.mapError(fail("getChangeRequest")),
+      );
+    },
 
-    getChangeRequestActivity: (input) =>
-      Effect.all(
+    getChangeRequestActivity: (input) => {
+      const notes = Effect.catchIf(
+        cli.listNotes(input),
+        (error) => gitLabProviderFailure(error).reason !== "rate-limited",
+        () => Effect.succeed({ comments: [], truncated: true }),
+      );
+      const commits = Effect.catchIf(
+        cli.listCommits(input),
+        (error) => gitLabProviderFailure(error).reason !== "rate-limited",
+        () => Effect.succeed([]),
+      );
+      const discussions = Effect.catchIf(
+        cli.listDiscussions(input),
+        (error) => gitLabProviderFailure(error).reason !== "rate-limited",
+        () => Effect.succeed({ threads: [], truncated: true }),
+      );
+      const awards = Effect.catchIf(
+        cli.listReactions(input),
+        (error) => gitLabProviderFailure(error).reason !== "rate-limited",
+        () =>
+          Effect.succeed({
+            reactions: [] as ReadonlyArray<PullRequestReaction>,
+            reactionsByNoteId: new Map<string, ReadonlyArray<PullRequestReaction>>(),
+          }),
+      );
+      return Effect.all(
         [
-          cli
-            .listNotes(input)
-            .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: true }))),
-          cli.listCommits(input).pipe(Effect.orElseSucceed(() => [])),
-          cli
-            .listDiscussions(input)
-            .pipe(Effect.orElseSucceed(() => ({ threads: [], truncated: true }))),
+          notes,
+          commits,
+          discussions,
           // The notes endpoint carries no award of any kind, so they are read alongside it. A
           // failed read costs the conversation its reactions rather than its words.
-          cli.listReactions(input).pipe(
-            Effect.orElseSucceed(() => ({
-              reactions: [] as ReadonlyArray<PullRequestReaction>,
-              reactionsByNoteId: new Map<string, ReadonlyArray<PullRequestReaction>>(),
-            })),
-          ),
+          awards,
         ],
         { concurrency: 4 },
       ).pipe(
@@ -274,7 +307,8 @@ export const make = Effect.gen(function* () {
           })),
           commits,
         })),
-      ),
+      );
+    },
 
     // The same read the detail takes it from, on its own: `user.can_merge` lives on the merge
     // request, so there is no cheaper thing to ask GitLab.

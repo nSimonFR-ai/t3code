@@ -7,13 +7,15 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as GitHubApi from "../sourceControl/GitHubApi.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as GitHubIssueCli from "./GitHubIssueCli.ts";
+import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const graphql = vi.fn<GitHubApi.GitHubApi["Service"]["graphql"]>();
 const rest = vi.fn<GitHubApi.GitHubApi["Service"]["rest"]>();
 const layer = GitHubIssueCli.layer.pipe(
-  Layer.provide(Layer.mock(GitHubApi.GitHubApi)({ graphql, rest })),
+  Layer.provideMerge(Layer.mock(GitHubApi.GitHubApi)({ graphql, rest })),
 );
 const target = { cwd: "/w", host: "enterprise.test", repository: "acme/web", number: 7 };
 const listing = {
@@ -64,6 +66,8 @@ const core = (extra: Record<string, unknown> = {}, role = "WRITE") =>
             ],
           },
           timelineItems: { nodes: [] },
+          parent: null,
+          subIssues: { nodes: [] },
           ...extra,
         },
       },
@@ -99,10 +103,211 @@ it.layer(layer)("GitHub issue API", (it) => {
       assert.equal(detail.assignees[0]?.avatarUrl, "https://avatars/julius");
       assert.equal(detail.viewerAccess.canTriage, true);
       assert.equal(detail.linkedPullRequests[0]?.number, 9);
+      assert.deepEqual(detail.ancestors, []);
+      assert.deepEqual(detail.subIssues, []);
       expect(graphql).toHaveBeenCalledTimes(1);
       expect(rest).not.toHaveBeenCalled();
       expect(graphql.mock.calls[0]?.[0].host).toBe(target.host);
       expect(graphql.mock.calls[0]?.[0].query).not.toContain("comments(last:");
+      expect(graphql.mock.calls[0]?.[0].minimumCost).toBe(3);
+      const limits = [
+        ...graphql.mock.calls[0]![0].query.matchAll(/subIssues\(first: (\d+)\)/g),
+      ].map((match) => Number(match[1]));
+      assert.lengthOf(limits, 3);
+      const [children, grandchildren, greatGrandchildren] = limits;
+      const descendants = children! * (1 + grandchildren! * (1 + greatGrandchildren!));
+      assert.isAtMost(descendants, 1_220);
+    }),
+  );
+
+  it.effect("exposes cross-repository ancestors, nested children and their pull requests", () =>
+    Effect.gen(function* () {
+      const relative = (
+        repository: string,
+        number: number,
+        extra: Record<string, unknown> = {},
+      ) => ({
+        number,
+        title: `${repository}#${number}`,
+        url: `https://enterprise.test/${repository}/issues/${number}`,
+        repository: { nameWithOwner: repository },
+        state: "CLOSED",
+        ...extra,
+      });
+      graphql.mockReturnValue(
+        Effect.succeed(
+          core({
+            parent: relative("acme/api", 7, {
+              parent: relative("acme/root", 7, { parent: relative("acme/top", 1) }),
+              closedByPullRequestsReferences: {
+                nodes: [
+                  {
+                    number: 9,
+                    title: "Parent fix",
+                    url: "https://enterprise.test/acme/api/pull/9",
+                    state: "MERGED",
+                    repository: { nameWithOwner: "acme/api" },
+                  },
+                ],
+              },
+            }),
+            subIssues: {
+              nodes: [
+                relative("acme/web", 8, {
+                  state: "OPEN",
+                  subIssues: {
+                    nodes: [
+                      relative("acme/api", 8, {
+                        subIssues: { nodes: [relative("acme/deep", 8)] },
+                      }),
+                    ],
+                  },
+                  timelineItems: {
+                    nodes: [
+                      {
+                        __typename: "CrossReferencedEvent",
+                        source: {
+                          __typename: "PullRequest",
+                          number: 9,
+                          title: "Child fix",
+                          url: "https://enterprise.test/acme/web/pull/9",
+                          state: "OPEN",
+                          isDraft: true,
+                          repository: { nameWithOwner: "acme/web" },
+                        },
+                      },
+                    ],
+                  },
+                }),
+                relative("acme/api", 8),
+              ],
+            },
+          }),
+        ),
+      );
+      const provider = yield* GitHubIssueProvider.make;
+      const detail = yield* provider.getIssue(target);
+      assert.deepEqual(
+        detail.ancestors?.map((issue) => [issue.repository, issue.number, issue.state]),
+        [
+          ["acme/top", 1, "closed"],
+          ["acme/root", 7, "closed"],
+          ["acme/api", 7, "closed"],
+        ],
+      );
+      assert.equal(detail.ancestors?.[2]?.linkedPullRequests?.[0]?.state, "merged");
+      assert.deepEqual(
+        detail.subIssues?.map((issue) => [issue.repository, issue.number, issue.url]),
+        [
+          ["acme/web", 8, "https://enterprise.test/acme/web/issues/8"],
+          ["acme/api", 8, "https://enterprise.test/acme/api/issues/8"],
+        ],
+      );
+      const child = detail.subIssues?.[0];
+      assert.equal(child?.state, "open");
+      assert.equal(child?.linkedPullRequests?.[0]?.closesIssue, false);
+      assert.equal(child?.linkedPullRequests?.[0]?.isDraft, true);
+      assert.equal(child?.subIssues[0]?.subIssues[0]?.repository, "acme/deep");
+      assert.deepEqual(child?.subIssues[0]?.subIssues[0]?.subIssues, []);
+      assert.equal(child?.subIssues[0]?.linkedPullRequests, undefined);
+      expect(graphql).toHaveBeenCalledTimes(1);
+    }),
+  );
+
+  it.effect("retries only unsupported hierarchy fields with the legacy query", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      for (const [index, message] of [
+        "Field 'parent' doesn't exist on type 'Issue'",
+        "Field 'subIssues' doesn't exist on type 'Issue'",
+      ].entries()) {
+        graphql.mockReset();
+        graphql
+          .mockReturnValueOnce(
+            Effect.fail(
+              new GitHubApi.GitHubApiResponseError({
+                host: target.host,
+                operation: "getIssueDetail",
+                status: 200,
+                githubErrors: [message],
+              }),
+            ),
+          )
+          .mockReturnValueOnce(Effect.succeed(core({ parent: undefined, subIssues: undefined })));
+        const host = `${index}.${target.host}`;
+        const detail = yield* cli.getIssueDetail({ ...target, host });
+        assert.deepEqual(detail.ancestors, []);
+        assert.deepEqual(detail.subIssues, []);
+        assert.equal(detail.linkedPullRequests[0]?.number, 9);
+        expect(graphql).toHaveBeenCalledTimes(2);
+        const fallback = graphql.mock.calls[1]![0];
+        expect(fallback.query).not.toContain("subIssues(");
+        expect(fallback.query).not.toContain("parent {");
+        assert.deepEqual(fallback.variables, { owner: "acme", name: "web", number: 7 });
+        assert.equal(fallback.host, host);
+      }
+    }),
+  );
+
+  it.effect("remembers unsupported hierarchy per host and probes again after expiry", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      const input = { ...target, host: "old.github.test" };
+      graphql
+        .mockReturnValueOnce(
+          Effect.fail(
+            new GitHubApi.GitHubApiResponseError({
+              host: input.host,
+              operation: "getIssueDetail",
+              status: 200,
+              githubErrors: ["Field 'parent' doesn't exist on type 'Issue'"],
+            }),
+          ),
+        )
+        .mockReturnValue(Effect.succeed(core()));
+      yield* cli.getIssueDetail(input);
+      expect(graphql).toHaveBeenCalledTimes(2);
+      yield* cli.getIssueDetail({ ...input, number: 8 });
+      expect(graphql).toHaveBeenCalledTimes(3);
+      expect(graphql.mock.calls[2]![0].query).not.toContain("subIssues(");
+      yield* cli.getIssueDetail({ ...input, host: "new.github.test" });
+      expect(graphql.mock.calls[3]![0].query).toContain("subIssues(");
+      yield* TestClock.adjust("10 minutes");
+      yield* cli.getIssueDetail(input);
+      expect(graphql.mock.calls[4]![0].query).toContain("subIssues(");
+    }),
+  );
+
+  it.effect("does not retry authentication or unrelated schema failures", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      for (const error of [
+        new GitHubApi.GitHubApiAuthenticationError({
+          host: target.host,
+          operation: "getIssueDetail",
+        }),
+        refused,
+        new GitHubApi.GitHubApiResponseError({
+          host: target.host,
+          operation: "getIssueDetail",
+          status: 200,
+          githubErrors: [
+            'Field "parent" does not exist on type "Issue"',
+            "Resource not accessible by integration",
+          ],
+        }),
+        new GitHubApi.GitHubApiResponseError({
+          host: target.host,
+          operation: "getIssueDetail",
+          status: 200,
+          githubErrors: ['Field "body" does not exist on type "Issue"'],
+        }),
+      ]) {
+        graphql.mockReset();
+        graphql.mockReturnValue(Effect.fail(error));
+        assert.strictEqual(yield* cli.getIssueDetail(target).pipe(Effect.flip), error);
+        expect(graphql).toHaveBeenCalledTimes(1);
+      }
     }),
   );
 
@@ -112,13 +317,17 @@ it.layer(layer)("GitHub issue API", (it) => {
       for (const raw of [
         "{",
         core({ number: null }),
+        core({ parent: { number: 1 } }),
+        core({ subIssues: { nodes: [{ number: 8 }] } }),
         encodeJson({ data: { repository: { issue: null } } }),
       ]) {
+        graphql.mockReset();
         graphql.mockReturnValue(Effect.succeed(raw));
         assert.equal(
           (yield* cli.getIssueDetail(target).pipe(Effect.flip))._tag,
           "GitHubIssueReadError",
         );
+        expect(graphql).toHaveBeenCalledTimes(1);
       }
     }),
   );
@@ -145,6 +354,22 @@ it.layer(layer)("GitHub issue API", (it) => {
       });
       graphql.mockReturnValue(Effect.fail(error));
       assert.strictEqual(yield* cli.getIssueDetail(target).pipe(Effect.flip), error);
+      expect(graphql).toHaveBeenCalledTimes(1);
+      graphql.mockReset();
+      graphql
+        .mockReturnValueOnce(
+          Effect.fail(
+            new GitHubApi.GitHubApiResponseError({
+              host: target.host,
+              operation: "getIssueDetail",
+              status: 200,
+              githubErrors: ["Field 'parent' doesn't exist on type 'Issue'"],
+            }),
+          ),
+        )
+        .mockReturnValue(Effect.fail(error));
+      assert.strictEqual(yield* cli.getIssueDetail(target).pipe(Effect.flip), error);
+      expect(graphql).toHaveBeenCalledTimes(2);
     }),
   );
 
@@ -318,7 +543,164 @@ it.layer(layer)("GitHub issue API", (it) => {
     }),
   );
 
-  it.effect("does not offer a cursor when one timestamp fills the search ceiling", () =>
+  it.effect("fills search slices larger than GitHub's page limit in every sort", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      for (const sort of ["updated", "created", "best-match"] as const) {
+        graphql.mockReset();
+        graphql
+          .mockReturnValueOnce(
+            Effect.succeed(
+              search(
+                Array.from({ length: 100 }, (_, i) => row(i + 1)),
+                "next",
+              ),
+            ),
+          )
+          .mockReturnValueOnce(
+            Effect.succeed(
+              search([row(101, "2026-07-01T00:00:00Z"), row(102, "2026-06-30T00:00:00Z")]),
+            ),
+          );
+        const batch = yield* cli.searchIssues({
+          ...listing,
+          repositories: [target.repository],
+          limit: 101,
+          sort,
+        });
+        assert.equal(batch.items.length, 101);
+        assert.equal(batch.items.at(-1)?.number, 101);
+        assert.equal(batch.truncated, true);
+        assert.equal(graphql.mock.calls[1]?.[0].variables?.["cursor"], "next");
+        expect(graphql).toHaveBeenCalledTimes(2);
+      }
+    }),
+  );
+
+  it.effect("finishes a timestamp group when the requested slice exceeds one search page", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql
+        .mockReturnValueOnce(
+          Effect.succeed(
+            search(
+              Array.from({ length: 100 }, (_, i) => row(i + 1)),
+              "next",
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            search([
+              ...Array.from({ length: 21 }, (_, i) => row(i + 101)),
+              row(122, "2026-07-01T00:00:00Z"),
+            ]),
+          ),
+        );
+      const batch = yield* cli.listIssues({ ...listing, limit: 101 });
+      assert.equal(batch.items.length, 121);
+      assert.equal(batch.items.at(-1)?.number, 121);
+      assert.equal(batch.truncated, true);
+      assert.equal(batch.continues, true);
+      assert.equal(graphql.mock.calls[1]?.[0].variables?.["cursor"], "next");
+      expect(graphql).toHaveBeenCalledTimes(2);
+    }),
+  );
+
+  it.effect.each([1000, 1001])("reports whether %i tied rows exceed the search ceiling", (total) =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockImplementation(({ variables }) => {
+        const start = Number(variables?.["cursor"] ?? 0);
+        const end = Math.min(start + 100, total);
+        return Effect.succeed(
+          search(
+            Array.from({ length: end - start }, (_, i) => row(start + i + 1)),
+            end < total ? String(end) : null,
+          ),
+        );
+      });
+      const searched = yield* cli.searchIssues({
+        ...listing,
+        repositories: [target.repository],
+        limit: 99,
+      });
+      assert.equal(searched.ceilingReached, total > 1000);
+      const batch = yield* cli.listIssues({ ...listing, limit: 99 });
+      assert.equal(batch.items.length, 1000);
+      assert.equal(batch.continues, total === 1000);
+      assert.equal(batch.truncated, total > 1000);
+      expect(graphql).toHaveBeenCalledTimes(20);
+    }),
+  );
+
+  it.effect("reads older issues after skipping a sent timestamp group larger than one page", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql
+        .mockReturnValueOnce(
+          Effect.succeed(
+            search(
+              Array.from({ length: 100 }, (_, i) => row(i + 1)),
+              "next",
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            search([
+              ...Array.from({ length: 21 }, (_, i) => row(i + 101)),
+              row(122, "2026-07-01T00:00:00Z"),
+            ]),
+          ),
+        );
+      const batch = yield* cli.listIssues({
+        ...listing,
+        limit: 101,
+        cursor: { updatedBefore: instant, seenAt: Array.from({ length: 121 }, (_, i) => i + 1) },
+      });
+      assert.deepEqual(
+        batch.items.map((item) => item.number),
+        [122],
+      );
+      assert.equal(batch.truncated, false);
+      expect(graphql).toHaveBeenCalledTimes(2);
+    }),
+  );
+
+  it.effect("skips sent timestamp rows by repository in a grouped search", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(
+        Effect.succeed(
+          search([
+            row(7),
+            {
+              ...row(7),
+              repository: { nameWithOwner: "acme/api" },
+              url: "https://enterprise.test/acme/api/issues/7",
+            },
+            row(8, "2026-07-01T00:00:00Z"),
+          ]),
+        ),
+      );
+      const batch = yield* cli.searchIssues({
+        ...listing,
+        repositories: ["acme/web", "acme/api"],
+        cursor: { updatedBefore: instant, seenAtByRepository: { "acme/web": [7] } },
+      });
+      assert.deepEqual(
+        batch.items.map((item) => [item.repository, item.number]),
+        [
+          ["acme/api", 7],
+          ["acme/web", 8],
+        ],
+      );
+      assert.equal(batch.truncated, false);
+    }),
+  );
+
+  it.effect("keeps sent-row continuation inside the search ceiling", () =>
     Effect.gen(function* () {
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
       graphql.mockImplementation(() =>
@@ -329,11 +711,25 @@ it.layer(layer)("GitHub issue API", (it) => {
           ),
         ),
       );
-      const batch = yield* cli.listIssues({ ...listing, limit: 99 });
-      assert.equal(batch.items.length, 1000);
+      const batch = yield* cli.listIssues({
+        ...listing,
+        limit: 99,
+        cursor: { updatedBefore: instant, seenAt: Array.from({ length: 100 }, (_, i) => i + 1) },
+      });
+      assert.equal(batch.items.length, 0);
       assert.equal(batch.continues, false);
       assert.equal(batch.truncated, true);
       expect(graphql).toHaveBeenCalledTimes(10);
+    }),
+  );
+
+  it.effect("stops an empty search page even when the host advertises a cursor", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(Effect.succeed(search([], "next")));
+      const batch = yield* cli.searchIssues({ ...listing, repositories: [target.repository] });
+      assert.deepEqual(batch.items, []);
+      expect(graphql).toHaveBeenCalledTimes(1);
     }),
   );
 
@@ -582,6 +978,34 @@ it.layer(layer)("GitHub issue API", (it) => {
       const templates = yield* cli.listIssueTemplates(target);
       assert.deepEqual(templates.templates, []);
       assert.equal(templates.blankIssuesEnabled, true);
+    }),
+  );
+
+  it.effect("preserves rate-limit errors from optional template reads", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      for (const error of [
+        new GitHubApi.GitHubApiRateLimitError({
+          host: target.host,
+          operation: "listIssueTemplates",
+          retryAt: 123456,
+        }),
+        new SourceControlRateLimit.SourceControlRateLimitPausedError({
+          provider: "github",
+          host: target.host,
+          retryAt: 123456,
+        }),
+      ]) {
+        for (const stage of ["forms", "config"] as const) {
+          graphql.mockImplementation((input) =>
+            input.operation === "listIssueTemplates"
+              ? Effect.succeed(encodeJson({ data: { repository: { issueTemplates: [] } } }))
+              : Effect.fail(stage === "forms" ? error : refused),
+          );
+          rest.mockReturnValue(Effect.fail(stage === "config" ? error : refused));
+          assert.strictEqual(yield* cli.listIssueTemplates(target).pipe(Effect.flip), error);
+        }
+      }
     }),
   );
 

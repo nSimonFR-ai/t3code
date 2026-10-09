@@ -15,8 +15,10 @@ const commands = vi.hoisted(() => ({
   commentsPage: vi.fn(),
   newThread: vi.fn(),
 }));
+const permission = vi.hoisted(() => ({ allowed: true }));
 afterEach(() => {
   vi.clearAllMocks();
+  permission.allowed = true;
   currentDetail = detail;
   currentActivity = activity;
 });
@@ -39,12 +41,11 @@ vi.mock("react/compiler-runtime", async () => {
   return { c: reactHookHarness.useMemoCache };
 });
 
-vi.mock("~/composerDraftStore", () => ({
-  useComposerDraftStore: { getState: () => ({}) },
-}));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => permission.allowed }));
 vi.mock("~/hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => commands.newThread }));
 vi.mock("~/hooks/useLiveRefresh", () => ({ useLiveRefresh: () => undefined }));
 vi.mock("~/localApi", () => ({ readLocalApi: () => null }));
+vi.mock("~/state/entities", () => ({ useProjects: () => [] }));
 vi.mock("~/state/issues", () => ({
   issueEnvironment: {
     detail: () => "detail",
@@ -53,6 +54,7 @@ vi.mock("~/state/issues", () => ({
     invalidate: "invalidate",
     runAction: "runAction",
     comment: "comment",
+    update: { permissionAtom: () => null },
   },
 }));
 vi.mock("~/state/query", () => ({
@@ -153,10 +155,26 @@ let currentDetail = detail;
 let currentActivity = activity;
 
 import { IssueDetailPanel } from "./IssueDetailPanel";
+import { useComposerDraftStore } from "~/composerDraftStore";
+import type { ReviewCommentContext } from "~/reviewCommentContext";
+import { writeHandoffToComposer } from "../sourceControl/handoff";
+
+const handoffChip = (id: string): ReviewCommentContext => ({
+  id,
+  sectionId: id,
+  sectionTitle: id,
+  filePath: id,
+  startIndex: 0,
+  endIndex: 0,
+  rangeLabel: id,
+  text: "",
+  diff: "",
+});
 import { IssuesPanel } from "./IssuesPanel";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { CommentComposer } from "../sourceControl/CommentComposer";
 import { IssueSummaryTab } from "./IssueSummaryTab";
+import { AlertDialog } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Menu, MenuItem } from "../ui/menu";
 import { TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -367,6 +385,42 @@ it.each(["comment-failed", "action-failed", "success"])(
   },
 );
 
+it.each([true, false])("offers issue writes only with write permission (%s)", (allowed) => {
+  hooks.reset();
+  permission.allowed = allowed;
+  currentDetail = {
+    ...detail,
+    capabilities: { ...detail.capabilities, comment: true, edit: true, reactions: true },
+    viewerPermissions: { ...detail.viewerPermissions, comment: true, edit: true, labels: true },
+  };
+  const panel = renderPanel();
+  const summary = visitElements(panel, (element) => element.type === IssueSummaryTab)!;
+  const shown = summary.props.detail as IssueDetail;
+  expect(shown.title).toBe(detail.title);
+  expect(shown.capabilities.reactions).toBe(allowed);
+  expect(shown.viewerPermissions.edit).toBe(allowed);
+  expect(shown.viewerPermissions.labels).toBe(allowed);
+});
+
+it("keeps the comment composer mounted while write access is withdrawn and restored", () => {
+  hooks.reset();
+  currentDetail = {
+    ...detail,
+    capabilities: { ...detail.capabilities, comment: true },
+    viewerPermissions: { ...detail.viewerPermissions, comment: true },
+  };
+  const composer = () =>
+    visitElements(renderPanel(), (element) => element.type === CommentComposer)!;
+  const mounted = composer();
+  expect(mounted.props.actionPending).toBe(false);
+  permission.allowed = false;
+  const revoked = composer();
+  expect(revoked.key).toBe(mounted.key);
+  expect(revoked.props.actionPending).toBe(true);
+  permission.allowed = true;
+  expect(composer().props.actionPending).toBe(false);
+});
+
 it("opens a related pull request through the thread issues panel handler", () => {
   hooks.reset();
   const onOpenLinkedPullRequest = vi.fn();
@@ -395,4 +449,78 @@ it("opens a related pull request through the thread issues panel handler", () =>
   };
   (summary.props.onOpenLinkedPullRequest as (value: typeof link) => void)(link);
   expect(onOpenLinkedPullRequest).toHaveBeenCalledWith(link);
+});
+
+it("blocks an open close confirmation while write access is revoked", async () => {
+  hooks.reset();
+  commands.action.mockResolvedValue({ _tag: "Success" });
+  currentDetail = {
+    ...detail,
+    capabilities: { ...detail.capabilities, actions: ["close"], comment: true },
+    viewerPermissions: { ...detail.viewerPermissions, actions: ["close"], comment: true },
+  };
+  const confirmButton = (panel: ReturnType<typeof IssueDetailPanel>) =>
+    visitElements(
+      panel,
+      (element) => element.type === Button && element.props.children === "Close issue",
+    )!;
+  const closeItem = visitElements(
+    renderPanel(),
+    (element) => element.type === MenuItem && textContent(element.props.children) === "Close issue",
+  );
+  (closeItem!.props.onClick as () => void)();
+
+  permission.allowed = false;
+  let panel = renderPanel();
+  expect(confirmButton(panel).props.disabled).toBe(true);
+  (confirmButton(panel).props.onClick as () => void)();
+  const composer = visitElements(panel, (element) => element.type === CommentComposer)!;
+  expect(
+    await (composer.props.onCommentAction as (body: string, action: "close") => Promise<unknown>)(
+      "Done",
+      "close",
+    ),
+  ).toEqual({ commentPosted: false });
+  expect(commands.comment).not.toHaveBeenCalled();
+  expect(commands.action).not.toHaveBeenCalled();
+  panel = renderPanel();
+  expect(visitElements(panel, (element) => element.type === AlertDialog)!.props.open).toBe(true);
+
+  permission.allowed = true;
+  panel = renderPanel();
+  expect(confirmButton(panel).props.disabled).toBe(false);
+  (confirmButton(panel).props.onClick as () => void)();
+  await Promise.resolve();
+  expect(commands.action).toHaveBeenCalledTimes(1);
+});
+
+it("replaces a pull request hand-off's prompt and chip when the issue is explained", async () => {
+  hooks.reset();
+  const target = "existing-draft" as DraftId;
+  const own = { ...handoffChip("review-comment:own"), text: "mine" };
+  useComposerDraftStore.getState().setPrompt(target, "Keep my draft");
+  useComposerDraftStore.getState().setReviewComments(target, [own]);
+  writeHandoffToComposer(target, {
+    prompt: "Explain this pull request.",
+    reviewComments: [handoffChip("pull-request-context:9")],
+  });
+  const panel = renderPanel(undefined, {
+    kind: "existing-thread",
+    projectRef: { environmentId: "environment-1" as EnvironmentId, projectId: detail.projectId },
+    draftId: target,
+  });
+  const explain = visitElements(
+    panel,
+    (element) =>
+      element.type === MenuItem && textContent(element.props.children).includes("Explain"),
+  );
+  await (explain!.props.onClick as () => Promise<void>)();
+  const draft = useComposerDraftStore.getState().getComposerDraft(target);
+  expect(draft?.reviewComments.map((comment) => comment.id)).toEqual([
+    "review-comment:own",
+    "issue-context:42",
+  ]);
+  expect(draft?.prompt).toContain("Keep my draft");
+  expect(draft?.prompt).toContain("Explain this issue.");
+  expect(draft?.prompt).not.toContain("Explain this pull request.");
 });

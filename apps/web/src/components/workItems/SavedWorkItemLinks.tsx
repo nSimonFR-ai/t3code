@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentId,
   IssueRef,
@@ -120,6 +121,8 @@ function EnabledSavedWorkItemLinks({
   );
   const link = useAtomCommand(workItemLinks.link, { reportFailure: false });
   const unlink = useAtomCommand(workItemLinks.unlink, { reportFailure: false });
+  const canLink = useAtomValue(workItemLinks.link.permissionAtom(environmentId));
+  const canUnlink = useAtomValue(workItemLinks.unlink.permissionAtom(environmentId));
   const targetKind = source.kind === "issue" ? "pull request" : "issue";
 
   const refreshPair = (pair: WorkItemLink) => {
@@ -135,7 +138,7 @@ function EnabledSavedWorkItemLinks({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (pending) return;
+    if (pending || !canLink) return;
     const target = linkTarget(
       source.kind,
       selectedProject?.id ?? null,
@@ -182,7 +185,7 @@ function EnabledSavedWorkItemLinks({
   };
 
   const remove = async (pair: WorkItemLink) => {
-    if (pending) return;
+    if (pending || !canUnlink) return;
     setPending(true);
     setError(null);
     const result = await unlink({
@@ -216,7 +219,7 @@ function EnabledSavedWorkItemLinks({
         <Button
           size="xs"
           variant="outline"
-          disabled={pending}
+          disabled={pending || !canLink}
           onClick={() => {
             setError(null);
             setOpen(true);
@@ -259,7 +262,7 @@ function EnabledSavedWorkItemLinks({
               size="icon-xs"
               variant="ghost"
               aria-label={`Unlink ${target.title}`}
-              disabled={pending}
+              disabled={pending || !canUnlink}
               onClick={() => void remove(pair)}
             >
               <UnlinkIcon className="size-3.5" />
@@ -360,7 +363,7 @@ function EnabledSavedWorkItemLinks({
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={pending}>
+              <Button type="submit" disabled={pending || !canLink}>
                 {pending ? "Linking…" : `Link ${targetKind}`}
               </Button>
             </DialogFooter>

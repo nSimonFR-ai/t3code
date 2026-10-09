@@ -31,6 +31,7 @@ import {
   ServerSettingsError,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
+import * as NodeUtil from "node:util";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -126,7 +127,13 @@ const normalizeServerSettings = (
   encodeServerSettings(settings).pipe(
     Effect.flatMap(decodeServerSettings),
     Effect.map(foldProviderInstanceEnabledFlags),
-    Effect.map((next) => ({ ...next, ...deriveLegacyProjectOverrides(next) })),
+    Effect.map((next) => ({
+      ...next,
+      ...deriveLegacyProjectOverrides(next),
+      issueTracking: NodeUtil.isDeepStrictEqual(next.issueTracking, settings.issueTracking)
+        ? settings.issueTracking
+        : next.issueTracking,
+    })),
     Effect.mapError(
       (cause) =>
         new ServerSettingsError({
@@ -1278,8 +1285,28 @@ const make = Effect.gen(function* () {
 
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
+      const current = yield* getSettingsFromCache;
       yield* Cache.invalidate(settingsCache, cacheKey);
-      const settings = yield* getSettingsFromCache;
+      let settings = yield* getSettingsFromCache;
+      const currentLinear = current.issueTracking.connections.linear;
+      const reloadedLinear = settings.issueTracking.connections.linear;
+      if (
+        currentLinear !== undefined &&
+        reloadedLinear !== undefined &&
+        NodeUtil.isDeepStrictEqual(currentLinear.projectBindings, reloadedLinear.projectBindings)
+      ) {
+        settings = {
+          ...settings,
+          issueTracking: {
+            ...settings.issueTracking,
+            connections: {
+              ...settings.issueTracking.connections,
+              linear: { ...reloadedLinear, projectBindings: currentLinear.projectBindings },
+            },
+          },
+        };
+        yield* Cache.set(settingsCache, cacheKey, settings);
+      }
       yield* emitChange(settings);
     }),
   );

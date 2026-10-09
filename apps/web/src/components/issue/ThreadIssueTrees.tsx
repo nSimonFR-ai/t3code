@@ -1,18 +1,22 @@
-import type {
-  EnvironmentId,
-  IssueLinkedPullRequest,
-  ProjectId,
-  ScopedThreadRef,
-  ThreadIssueLink,
+import {
+  type EnvironmentId,
+  formatIssueReference,
+  type IssueLinkedPullRequest,
+  type IssueRelative,
+  normalizeWorkItemLinkKey,
+  type ProjectId,
+  type ScopedThreadRef,
+  type ThreadIssueLink,
 } from "@t3tools/contracts";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useLiveRefresh } from "~/hooks/useLiveRefresh";
+import { openLinkInBrowser } from "~/lib/openIssueLink";
 import { cn } from "~/lib/utils";
 import { useThreadShell } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
-import { useAtomCommand } from "~/state/use-atom-command";
 import { Spinner } from "../ui/spinner";
 import {
   type IssueTreeRoot,
@@ -21,17 +25,16 @@ import {
   mergeIssueTrees,
 } from "./IssueTree";
 
-/** How often an open panel re-reads its trees, for sub-issues filed outside this thread. */
-const TREE_REFRESH_MS = 60_000;
-
 interface ThreadIssueTreesProps {
   environmentId: EnvironmentId;
   threadRef: ScopedThreadRef | null;
   linked: ReadonlyArray<ThreadIssueLink>;
   /** The project an issue is read through; null when none here can read it. */
   projectFor: (issue: ThreadIssueLink) => ProjectId | null;
-  /** Opens `number`, an issue in the same tracker project as the linked `issue`. */
-  onOpen: (issue: ThreadIssueLink, number: number) => void;
+  onOpen: (
+    issue: ThreadIssueLink,
+    relative: Pick<IssueRelative, "repository" | "number" | "url">,
+  ) => void;
   /** Opens a pull request the tracker reports for an issue in a tree. */
   onOpenPullRequest: (link: IssueLinkedPullRequest) => void;
   /** Shown for an issue whose tree cannot be read; defaults to a plain row. */
@@ -73,10 +76,6 @@ export function ThreadIssueTrees({
     if (wasRunning.current && !running) setRefreshToken((token) => token + 1);
     wasRunning.current = running;
   }, [running]);
-  useEffect(() => {
-    const timer = setInterval(() => setRefreshToken((token) => token + 1), TREE_REFRESH_MS);
-    return () => clearInterval(timer);
-  }, []);
 
   const [reads, setReads] = useState<Record<string, TreeRead>>({});
   const report = useCallback((key: string, read: TreeRead) => {
@@ -100,7 +99,7 @@ export function ThreadIssueTrees({
           return detail && projectFor(issue) !== null
             ? [
                 {
-                  scope: `${issue.provider}:${issue.repository}`,
+                  provider: issue.provider,
                   linkKey: threadIssueKey(issue),
                   detail,
                 },
@@ -143,7 +142,7 @@ export function ThreadIssueTrees({
             {tree.rows.map((row) => {
               const linkedIssue = row.linkKey === null ? undefined : byKey.get(row.linkKey);
               return (
-                <Fragment key={`${row.depth}:${row.issue.number}`}>
+                <Fragment key={`${row.depth}:${row.issue.url}`}>
                   <div className="group relative">
                     <IssueTreeRow
                       row={{
@@ -152,8 +151,11 @@ export function ThreadIssueTrees({
                         current: linkedIssue !== undefined,
                       }}
                       repository={scopeIssue.repository}
-                      onOpen={(relative) => onOpen(scopeIssue, relative.number)}
-                      onOpenCurrent={() => onOpen(scopeIssue, row.issue.number)}
+                      referenceStyle={referenceStyleOf(scopeIssue)}
+                      onOpen={(relative) => onOpen(scopeIssue, relative)}
+                      onOpenCurrent={() =>
+                        onOpen(linkedIssue ?? scopeIssue, linkedIssue ?? row.issue)
+                      }
                     />
                     {linkedIssue && renderActions ? (
                       <div className="absolute top-1/2 right-1 -translate-y-1/2 rounded-md bg-background opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 has-[[data-popup-open]]:opacity-100">
@@ -189,7 +191,7 @@ export function ThreadIssueTrees({
         return (
           <div key={key}>
             {renderFallback?.(issue) ?? (
-              <PlainIssueRow issue={issue} onOpen={() => onOpen(issue, issue.number)} />
+              <PlainIssueRow issue={issue} onOpen={() => openLinkInBrowser(issue.url)} />
             )}
           </div>
         );
@@ -198,12 +200,13 @@ export function ThreadIssueTrees({
   );
 }
 
-function threadIssueKey(issue: {
-  readonly provider: string;
-  readonly repository: string;
-  readonly number: number;
-}) {
-  return `${issue.provider}:${issue.repository}#${issue.number}`;
+function threadIssueKey(issue: ThreadIssueLink) {
+  const key = normalizeWorkItemLinkKey(issue);
+  return `${key.provider}:${key.url}`;
+}
+
+function referenceStyleOf(issue: ThreadIssueLink) {
+  return issue.provider === "linear" ? ("key-number" as const) : ("hash" as const);
 }
 
 function PlainIssueRow({ issue, onOpen }: { issue: ThreadIssueLink; onOpen: () => void }) {
@@ -215,7 +218,7 @@ function PlainIssueRow({ issue, onOpen }: { issue: ThreadIssueLink; onOpen: () =
     >
       <span className="min-w-0 flex-1 truncate">{issue.title}</span>
       <span className="shrink-0 text-muted-foreground tabular-nums">
-        {issue.repository}-{issue.number}
+        {formatIssueReference({ ...issue, referenceStyle: referenceStyleOf(issue) })}
       </span>
     </button>
   );
@@ -247,18 +250,26 @@ function LinkedIssueRead({
   const detailQuery = useEnvironmentQuery(
     issueEnvironment.detail({ environmentId, input: reference }),
   );
-  const invalidate = useAtomCommand(issueEnvironment.invalidate, { reportFailure: false });
   const { refresh } = detailQuery;
+  useLiveRefresh(detailQuery.isPending ? null : refresh, {
+    key: `issue:${environmentId}:${projectId}:${issue.repository}#${issue.number}`,
+  });
   const applied = useRef(refreshToken);
   useEffect(() => {
     if (applied.current === refreshToken) return;
     applied.current = refreshToken;
-    // Around the server's cache, so a sub-issue filed a moment ago is in the answer.
-    void Promise.resolve(invalidate({ environmentId, input: { reference } })).finally(refresh);
-  }, [environmentId, invalidate, reference, refresh, refreshToken]);
+    refresh();
+  }, [refresh, refreshToken]);
 
-  const detail = detailQuery.data ?? null;
-  const pending = detail === null && detailQuery.isPending;
+  const data = detailQuery.data ?? null;
+  const detail =
+    data !== null &&
+    detailQuery.error === null &&
+    data.provider === issue.provider &&
+    normalizeWorkItemLinkKey(data).url === normalizeWorkItemLinkKey(issue).url
+      ? data
+      : null;
+  const pending = data === null && detailQuery.isPending;
   const key = threadIssueKey(issue);
   useEffect(() => onRead(key, { detail, pending }), [detail, key, onRead, pending]);
   return null;

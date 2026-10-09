@@ -12,6 +12,14 @@ const state = vi.hoisted(() => ({
   unlink: vi.fn(),
   openLink: vi.fn(),
   data: { links: [] as WorkItemLink[], truncated: false },
+  allowed: { link: true, unlink: true } as Record<string, boolean>,
+  permissionTargets: [] as unknown[],
+}));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: ([command, target]: [string, unknown]) => {
+    state.permissionTargets.push(target);
+    return state.allowed[command];
+  },
 }));
 vi.mock("~/state/entities", () => ({
   useServerConfigs: () =>
@@ -39,8 +47,8 @@ vi.mock("~/state/workItems", () => ({
       state.queries.push(target);
       return target;
     },
-    link: "link",
-    unlink: "unlink",
+    link: { name: "link", permissionAtom: (target: unknown) => ["link", target] },
+    unlink: { name: "unlink", permissionAtom: (target: unknown) => ["unlink", target] },
   },
 }));
 vi.mock("~/state/query", () => ({
@@ -53,7 +61,8 @@ vi.mock("~/state/query", () => ({
   formatEnvironmentQueryError: () => "Server rejected link",
 }));
 vi.mock("~/state/use-atom-command", () => ({
-  useAtomCommand: (command: string) => (command === "link" ? state.link : state.unlink),
+  useAtomCommand: (command: { name: string }) =>
+    command.name === "link" ? state.link : state.unlink,
 }));
 vi.mock("~/rpc/atomRegistry", () => ({ appAtomRegistry: { refresh: state.refreshAtom } }));
 vi.mock("~/lib/openIssueLink", () => ({ openLinkInBrowser: state.openLink }));
@@ -121,6 +130,8 @@ beforeEach(() => {
   state.supported = true;
   state.data = { links: [], truncated: false };
   state.queries.length = 0;
+  state.allowed = { link: true, unlink: true };
+  state.permissionTargets.length = 0;
   for (const mock of [state.refresh, state.refreshAtom, state.link, state.unlink, state.openLink])
     mock.mockReset();
 });
@@ -274,4 +285,32 @@ it("resets the target project when the same item is opened from another project"
   await openDialog("Link pull request");
   expect(renderer.root.findByType("select").props.value).toBe("project-2");
   expect(renderer.root.findAllByType("input")[0]!.props.value).toBe("acme/backend");
+});
+
+it("keeps saved links readable but blocks link and unlink without destination permission", async () => {
+  state.allowed = { link: false, unlink: false };
+  state.data = { links: [pair], truncated: false };
+  await act(() => {
+    renderer = create(<SavedWorkItemLinks environmentId={environmentId} source={issue} />);
+  });
+  expect(state.permissionTargets).toContain(environmentId);
+  expect(button("Link pull request").props.disabled).toBe(true);
+  expect(button("Unlink Repair flow").props.disabled).toBe(true);
+  await act(async () => button("Unlink Repair flow").props.onClick());
+  expect(state.unlink).not.toHaveBeenCalled();
+  await act(() => button("Repair flow").props.onClick());
+  expect(state.openLink).toHaveBeenCalledExactlyOnceWith(pullRequest.url);
+
+  state.allowed = { link: true, unlink: false };
+  await act(() =>
+    renderer.update(<SavedWorkItemLinks environmentId={environmentId} source={issue} />),
+  );
+  await openDialog("Link pull request");
+  await enter("Number", "14");
+  state.allowed = { link: false, unlink: false };
+  await act(() =>
+    renderer.update(<SavedWorkItemLinks environmentId={environmentId} source={issue} />),
+  );
+  await submit();
+  expect(state.link).not.toHaveBeenCalled();
 });

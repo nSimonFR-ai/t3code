@@ -646,7 +646,7 @@ const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly repository: string;
     readonly entry: GitLabIssueTemplateEntry;
-  }): Effect.Effect<ReadonlyArray<IssueTemplate>, never> =>
+  }): Effect.Effect<ReadonlyArray<IssueTemplate>, GitLabIssueCliError> =>
     api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/templates/issues/${encodeURIComponent(input.entry.key)}`,
@@ -669,7 +669,10 @@ const make = Effect.gen(function* () {
             ]
           : [];
       }),
-      Effect.orElseSucceed((): ReadonlyArray<IssueTemplate> => []),
+      Effect.catchIf(
+        (error) => error._tag !== "GitLabCliRateLimitError",
+        () => Effect.succeed<ReadonlyArray<IssueTemplate>>([]),
+      ),
     );
 
   /** Every write to an issue is the same PUT, so its body is the only thing that differs. */

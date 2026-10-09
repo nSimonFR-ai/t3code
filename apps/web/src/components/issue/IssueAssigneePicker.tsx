@@ -8,7 +8,7 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, IssueAssigneeCandidate, IssueRef } from "@t3tools/contracts";
 import { CheckIcon, UserPlusIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { issueEnvironment } from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
@@ -50,6 +50,8 @@ export function IssueAssigneePicker({
 }) {
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<string | null>(null);
+  const writing = useRef(false);
+  const [written, setWritten] = useState<{ ids: ReadonlyArray<string>; at: number } | null>(null);
 
   // Mounted with the menu closed, so nothing is asked of the host until it opens.
   const candidatesQuery = useEnvironmentQuery(
@@ -57,7 +59,11 @@ export function IssueAssigneePicker({
   );
   const setAssignees = useAtomCommand(issueEnvironment.setAssignees, { reportFailure: false });
 
-  const all = useMemo(() => candidatesQuery.data?.candidates ?? [], [candidatesQuery.data]);
+  const all = useMemo(() => {
+    const listed = candidatesQuery.data?.candidates ?? [];
+    if (written === null || candidatesQuery.dataUpdatedAt > written.at) return listed;
+    return listed.map((entry) => ({ ...entry, isAssigned: written.ids.includes(entry.id) }));
+  }, [candidatesQuery.data, candidatesQuery.dataUpdatedAt, written]);
   const candidates = useMemo(() => all.filter((entry) => matches(entry, query)), [all, query]);
   /**
    * The host has more people with access than it listed — a common thing on an organisation
@@ -68,7 +74,7 @@ export function IssueAssigneePicker({
   const truncated = candidatesQuery.data?.truncated === true;
 
   const toggle = async (candidate: IssueAssigneeCandidate) => {
-    if (pending !== null) return;
+    if (writing.current) return;
     // Every host writes assignees by replacing the whole set, and addresses a person by an
     // identifier the issue itself does not carry — GitLab assigns by numeric user id. So the set
     // is rebuilt from this list rather than from the issue's own assignees, which is also why
@@ -76,8 +82,10 @@ export function IssueAssigneePicker({
     const next = candidate.isAssigned
       ? all.flatMap((entry) => (entry.isAssigned && entry.id !== candidate.id ? [entry.id] : []))
       : [...all.flatMap((entry) => (entry.isAssigned ? [entry.id] : [])), candidate.id];
+    writing.current = true;
     setPending(candidate.id);
     const result = await setAssignees({ environmentId, input: { ...reference, assignees: next } });
+    writing.current = false;
     setPending(null);
     if (result._tag === "Failure") {
       toastManager.add({
@@ -92,6 +100,7 @@ export function IssueAssigneePicker({
       });
       return;
     }
+    setWritten({ ids: next, at: Date.now() });
     toastManager.add({
       type: "success",
       title: candidate.isAssigned

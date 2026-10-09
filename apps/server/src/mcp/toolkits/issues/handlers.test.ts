@@ -32,6 +32,10 @@ import * as IssuesHandlers from "./handlers.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { liveThreadsLayer, liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
+import * as IssueProviderRegistry from "../../../issue/IssueProviderRegistry.ts";
+import * as SourceControlRateLimit from "../../../sourceControl/SourceControlRateLimit.ts";
 import { IssuesToolkit } from "./tools.ts";
 
 const projectId = ProjectId.make("project-1");
@@ -155,6 +159,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     activity?: IssueActivity;
     page?: IssueCommentsPageResult;
     readError?: IssueOperationError;
+    detailRead?: IssueService.IssueService["Service"]["detail"];
     callerActive?: boolean;
   } = {},
 ) {
@@ -186,12 +191,14 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       detail: (ref) =>
         Ref.update(detailRequests, (recorded) => [...recorded, ref]).pipe(
           Effect.andThen(
-            content.readError
-              ? Effect.fail(content.readError)
-              : Effect.succeed({
-                  ...(content.detail ?? issueDetail),
-                  provider: ref.provider ?? content.detail?.provider ?? issue.provider,
-                }),
+            content.detailRead
+              ? content.detailRead(ref)
+              : content.readError
+                ? Effect.fail(content.readError)
+                : Effect.succeed({
+                    ...(content.detail ?? issueDetail),
+                    provider: ref.provider ?? content.detail?.provider ?? issue.provider,
+                  }),
           ),
         ),
       activity: (ref) =>
@@ -300,7 +307,7 @@ describe("issue toolkit handlers", () => {
         };
         yield* harness.call("read_issue", input);
         yield* harness.call("read_issue", { ...input, commentsCursor: "next-page" });
-        expect(yield* Ref.get(harness.detailRequests)).toEqual([ref]);
+        expect(yield* Ref.get(harness.detailRequests)).toEqual([ref, ref]);
         expect(yield* Ref.get(harness.activityRequests)).toEqual([ref]);
         expect(yield* Ref.get(harness.commentsPageRequests)).toEqual([
           { ...ref, cursor: "next-page" },
@@ -309,7 +316,7 @@ describe("issue toolkit handlers", () => {
           _tag: "McpCapabilityUnavailableError",
           capability: "issues",
         });
-        expect(yield* Ref.get(harness.detailRequests)).toEqual([ref]);
+        expect(yield* Ref.get(harness.detailRequests)).toEqual([ref, ref]);
       }
     }),
   );
@@ -321,7 +328,9 @@ describe("issue toolkit handlers", () => {
         projectId: ProjectId.make("enterprise-project"),
         url: "https://github.example.com/t3tools/t3code/issues/7",
       };
-      const harness = yield* makeHarness(thread([issue, enterprise]));
+      const harness = yield* makeHarness(thread([issue, enterprise]), undefined, {
+        detail: { ...issueDetail, url: enterprise.url },
+      });
       const input = { repository: issue.repository, number: issue.number, provider: "github" };
       expect(yield* harness.call("read_issue", input).pipe(Effect.flip)).toMatchObject({
         _tag: "IssueOperationError",
@@ -333,6 +342,85 @@ describe("issue toolkit handlers", () => {
         { projectId: enterprise.projectId, ...input, host: "github.example.com" },
       ]);
     }),
+  );
+
+  it.effect.each([undefined, "next-comments-page"])(
+    "rejects a saved Linear issue from another organization before reading comments ($0)",
+    (commentsCursor) =>
+      Effect.gen(function* () {
+        const linked = {
+          ...issue,
+          provider: "linear",
+          repository: "ENG",
+          number: 5,
+          projectId: ProjectId.make("linear-project"),
+          url: "https://linear.app/org-a/issue/ENG-5/original-title",
+        };
+        const harness = yield* makeHarness(thread([linked]), undefined, {
+          detail: {
+            ...issueDetail,
+            ...linked,
+            url: "https://linear.app/org-b/issue/ENG-5/other-title",
+          },
+        });
+        expect(
+          yield* harness
+            .call("read_issue", {
+              repository: linked.repository,
+              number: linked.number,
+              provider: linked.provider,
+              url: linked.url,
+              ...(commentsCursor === undefined ? {} : { commentsCursor }),
+            })
+            .pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "IssueOperationError",
+          detail: "The resolved issue does not match the linked issue URL.",
+        });
+        expect(yield* Ref.get(harness.detailRequests)).toEqual([
+          {
+            projectId: linked.projectId,
+            provider: "linear",
+            repository: "ENG",
+            number: 5,
+            host: "linear.app",
+          },
+        ]);
+        expect(yield* Ref.get(harness.activityRequests)).toEqual([]);
+        expect(yield* Ref.get(harness.commentsPageRequests)).toEqual([]);
+      }),
+  );
+
+  it.effect.each(["github", "gitlab", "bitbucket", "azure-devops", "linear", "custom"])(
+    "reads linked $0 issues using their normalized canonical identity",
+    (provider) =>
+      Effect.gen(function* () {
+        const linked = {
+          ...issue,
+          provider,
+          url: provider === "linear" ? "https://linear.app/org/issue/ENG-7/old-title" : issue.url,
+        };
+        const resolvedUrl =
+          provider === "linear"
+            ? "https://linear.app/org/issue/ENG-7/new-title?view=activity#comment"
+            : `${linked.url}?view=activity#comment`;
+        const harness = yield* makeHarness(thread([linked]), undefined, {
+          detail: { ...issueDetail, ...linked, url: resolvedUrl },
+        });
+        const input = {
+          repository: linked.repository,
+          number: linked.number,
+          provider,
+          url: resolvedUrl,
+        };
+        expect((yield* harness.call("read_issue", input)).markdown).toContain(resolvedUrl);
+        expect(
+          (yield* harness.call("read_issue", { ...input, commentsCursor: "next-page" })).markdown,
+        ).toContain(comment.body);
+        expect(yield* Ref.get(harness.detailRequests)).toHaveLength(2);
+        expect(yield* Ref.get(harness.activityRequests)).toHaveLength(1);
+        expect(yield* Ref.get(harness.commentsPageRequests)).toHaveLength(1);
+      }),
   );
 
   it.effect("rejects an unmatched URL instead of using it to choose a source", () =>
@@ -687,6 +775,91 @@ describe("issue toolkit handlers", () => {
         capability: "issues",
         threadId,
       });
+    }),
+  );
+
+  it.effect("lists saved issue links only for a host in the thread project", () =>
+    Effect.gen(function* () {
+      const project = {
+        id: projectId,
+        title: "T3 Code",
+        workspaceRoot: "/tmp/project",
+        repositoryIdentity: null,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      };
+      const service = yield* IssueService.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            SourceControlRateLimit.layer,
+            Layer.mock(ProjectService.ProjectService)({
+              listShells: () => Effect.succeed([project]),
+            }),
+            Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+              resolve: () => Effect.succeed(null),
+            }),
+            Layer.mock(IssueProviderRegistry.IssueProviderRegistry)({
+              resolveProjects: () =>
+                Effect.succeed({
+                  supported: [
+                    {
+                      project,
+                      repository: issue.repository,
+                      host: "github.com",
+                      adapter: {
+                        kind: "github" as const,
+                        capabilities: issueDetail.capabilities,
+                        getViewer: () => Effect.succeed("reporter"),
+                        getViewerPermissions: () => Effect.succeed(issueDetail.viewerPermissions),
+                        getIssue: () =>
+                          Effect.succeed({
+                            ...issueDetail,
+                            viewer: "reporter",
+                            reactions: [],
+                            ancestors: [],
+                            subIssues: [],
+                          }),
+                        getIssueActivity: () => Effect.die("unused"),
+                        listIssues: () =>
+                          Effect.succeed({ items: [], truncated: false, continues: false }),
+                        runAction: () => Effect.void,
+                        comment: () => Effect.void,
+                        create: () => Effect.die("unused"),
+                        update: () => Effect.void,
+                        setLabels: () => Effect.void,
+                        setAssignees: () => Effect.void,
+                        listLabelCandidates: () =>
+                          Effect.succeed({ candidates: [], truncated: false }),
+                        listAssigneeCandidates: () =>
+                          Effect.succeed({ candidates: [], truncated: false }),
+                      },
+                    },
+                  ],
+                  unimplemented: new Map(),
+                  viewerRoots: new Map(),
+                }),
+            }),
+          ),
+        ),
+      );
+      const harness = yield* makeHarness(thread(), undefined, { detailRead: service.detail });
+      const source = { kind: "issue" as const, ...issue, host: "github.com" };
+      expect(yield* harness.call("list_issue_pull_request_links", { source })).toEqual({
+        links: [savedLink],
+        truncated: false,
+      });
+      expect(
+        yield* harness
+          .call("list_issue_pull_request_links", {
+            source: { ...source, host: "github.example.com" },
+          })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "IssueOperationError", operation: "resolveRepository" });
+      expect(yield* Ref.get(harness.savedLinkRequests)).toEqual([
+        { list: { source: { provider: "github", url: issue.url } } },
+      ]);
     }),
   );
 

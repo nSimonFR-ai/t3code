@@ -4,12 +4,12 @@ import type {
   IssueDetailView,
   IssueEvent,
   IssueActor,
+  IssueProviderKind,
   WorkItemMatch,
 } from "@t3tools/contracts";
 
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
-import { handoffReviewComments } from "../sourceControl/handoff";
 /** Activity changes only when the same host resource reports a newer revision. */
 export function shouldRefreshIssueActivity(
   previous: { readonly key: string; readonly updatedAt: string } | null,
@@ -211,6 +211,8 @@ export interface IssueHandoff {
 
 /** What every hand-off is told about, which is the issue rather than a checkout of anything. */
 export interface IssueHandoffSource {
+  readonly provider: IssueProviderKind;
+  readonly closesViaPullRequest: boolean;
   readonly number: number;
   readonly repository: string;
   readonly title: string;
@@ -219,29 +221,6 @@ export interface IssueHandoffSource {
   readonly comments: ReadonlyArray<IssueComment>;
   /** The issue this one was split out of, which usually holds the specification. */
   readonly parent?: IssueRelative;
-}
-
-/**
- * Chips this surface left in a composer, told apart from the ones a reader attached themselves
- * and from a pull request's. Namespaced rather than shared, so an issue hand-off takes back its
- * own context and leaves a change request's alone.
- */
-const ISSUE_HANDOFF_COMMENT_ID_PREFIX = "issue-";
-
-/**
- * The chips the composer should hold once an issue hand-off lands there: this one's, plus
- * whatever the reader attached. What an earlier issue hand-off left goes — a question about one
- * issue carrying another one's context is not a question anybody meant to ask — and the shared
- * rule takes a pull request's with it, for the same reason.
- */
-export function issueHandoffReviewComments(
-  existing: ReadonlyArray<ReviewCommentContext>,
-  incoming: ReadonlyArray<ReviewCommentContext>,
-): ReadonlyArray<ReviewCommentContext> {
-  return handoffReviewComments(
-    existing.filter((comment) => !comment.id.startsWith(ISSUE_HANDOFF_COMMENT_ID_PREFIX)),
-    incoming,
-  );
 }
 
 /**
@@ -354,20 +333,26 @@ export function buildExplainIssueHandoff(input: IssueHandoffSource): IssueHandof
 /** Names the hand-off, so the section's own button and the panel running it agree on which. */
 export const LINK_PULL_REQUESTS_HANDOFF_KIND = "link-pull-requests";
 
-/**
- * Links one selected change request to this issue where the host reads the relationship. There
- * is no call to make for a link: the host derives one from a closing
- * keyword in a change request's description, so those descriptions are what get edited — and
- * saying so is what keeps the agent from going looking for an API that does not exist.
- */
 export function buildLinkPullRequestsHandoff(
   input: IssueHandoffSource,
   pullRequest: WorkItemMatch,
 ): IssueHandoff {
+  const supportsClosing =
+    input.closesViaPullRequest &&
+    input.provider === pullRequest.provider &&
+    URL.canParse(input.url) &&
+    URL.canParse(pullRequest.url) &&
+    new URL(input.url).host === new URL(pullRequest.url).host;
+  const reference =
+    input.repository.toLowerCase() === pullRequest.repository.toLowerCase()
+      ? `#${input.number}`
+      : boundedField(input.url);
   return {
     prompt: [
       `Link pull request #${pullRequest.number} on \`${boundedField(pullRequest.repository)}\` to issue #${input.number} on \`${boundedField(input.repository)}\`.`,
-      `Read the issue and the selected pull request at ${boundedField(pullRequest.url)}. Record the link in that pull request's own description: \`Closes #${input.number}\` where the change closes this issue, and a plain \`#${input.number}\` mention where it only relates to it.`,
+      supportsClosing
+        ? `Read the issue and the selected pull request at ${boundedField(pullRequest.url)}. Record the link in that pull request's own description: \`Closes ${reference}\` where the change closes this issue, and a plain \`${reference}\` mention where it only relates to it.`
+        : `Read the issue at ${boundedField(input.url)} and the selected pull request at ${boundedField(pullRequest.url)}. Add the issue's URL to that pull request's description with a brief explanation of the relationship. Do not claim that this closes or formally links the issue on its host. Use link_issue_to_pull_request when available to save the link.`,
       "Edit that description and nothing else: keep every word it already has and add only the line carrying the link.",
     ].join("\n"),
     reviewComments: [

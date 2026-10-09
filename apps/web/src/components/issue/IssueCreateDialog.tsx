@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   buildIssueTemplateBody,
@@ -341,6 +342,7 @@ export function IssueCreateDialog({
   const [expanded, setExpanded] = useState(false);
   const [createMore, setCreateMore] = useState(false);
   const create = useAtomCommand(issueEnvironment.create, { reportFailure: false });
+  const allowed = useAtomValue(issueEnvironment.create.permissionAtom(environmentId));
 
   // The page hands over the projects it lists; their repositories come from the workspace, which
   // is the only thing that knows what each one was cloned from.
@@ -445,6 +447,7 @@ export function IssueCreateDialog({
     selected !== undefined &&
     !templatesQuery.isPending &&
     can.create &&
+    allowed &&
     choice !== null &&
     (choice.kind === "blank" ? offer.blankIssuesEnabled : template !== undefined) &&
     trimmedTitle.length > 0 &&

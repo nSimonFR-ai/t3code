@@ -15,6 +15,7 @@ import {
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 
 import {
+  linearProjectForTeam,
   linkIssuePreviewMatchesReference,
   resolveLinkIssueInput,
 } from "~/components/pullRequest/LinkPullRequestDialog";
@@ -43,12 +44,12 @@ export function resolveIssueUrl(input: {
         : { id: project.id, repository: repositoryForProjectLink(project, link.repository) };
     },
     linearProjectId: (team) =>
-      (
-        input.projects.find(
-          (project) =>
-            input.linearBindings?.[project.id]?.repository.toLowerCase() === team.toLowerCase(),
-        ) ?? input.projects.find((project) => project.id === input.threadProjectId)
-      )?.id,
+      linearProjectForTeam({
+        team,
+        projects: input.projects,
+        currentProjectId: input.threadProjectId,
+        bindings: input.linearBindings,
+      }),
   });
 }
 

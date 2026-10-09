@@ -105,8 +105,7 @@ interface ResolvedLink {
 
 /**
  * Which pull request an input names, or why it cannot. A URL carries its own host and
- * repository and may point at any repository on a host this environment has a project for; a
- * bare `#123` can only mean the thread's own repository.
+ * repository; a bare `#123` can only mean the thread's own repository.
  */
 export function resolveLinkPullRequestInput(input: {
   readonly reference: string;
@@ -228,6 +227,25 @@ export function linkIssuePreviewMatchesReference(
     requested.pathname.split("/").slice(0, 4).join("/").toLowerCase() ===
       preview.pathname.split("/").slice(0, 4).join("/").toLowerCase()
   );
+}
+
+export function linearProjectForTeam(input: {
+  readonly team: string;
+  readonly projects: ReadonlyArray<{ readonly id: ProjectId }>;
+  readonly currentProjectId: string | null;
+  readonly bindings:
+    | Readonly<Record<ProjectId, { readonly repository: string } | null>>
+    | undefined;
+}): ProjectId | undefined {
+  const bound = input.projects.filter(
+    (project) =>
+      input.bindings?.[project.id]?.repository.toLowerCase() === input.team.toLowerCase(),
+  );
+  return (
+    bound.find((project) => project.id === input.currentProjectId) ??
+    bound[0] ??
+    input.projects.find((project) => project.id === input.currentProjectId)
+  )?.id;
 }
 
 export function resolveLinkIssueInput(input: {
@@ -373,12 +391,12 @@ function LinkPullRequestDialog({
                   };
             },
             linearProjectId: (team) =>
-              (
-                environmentProjects.find(
-                  (project) =>
-                    linearBindings?.[project.id]?.repository.toLowerCase() === team.toLowerCase(),
-                ) ?? environmentProjects.find((project) => project.id === projectId)
-              )?.id,
+              linearProjectForTeam({
+                team,
+                projects: environmentProjects,
+                currentProjectId: projectId,
+                bindings: linearBindings,
+              }),
           })
         : null,
     [environmentProjects, kind, linearBindings, ownProject, projectId, reference],
@@ -527,8 +545,7 @@ function LinkPullRequestDialog({
         <DialogHeader>
           <DialogTitle>Link {subject}</DialogTitle>
           <DialogDescription>
-            Attach {noun} to this thread. A full URL can point at any repository on a host this
-            environment has a project for.
+            Attach {noun} to this thread by its URL, or by its number for this thread's repository.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>

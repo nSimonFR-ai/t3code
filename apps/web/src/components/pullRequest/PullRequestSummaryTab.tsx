@@ -888,7 +888,7 @@ export function PullRequestSummaryTab({
         actions={
           <WorkItemMatchButton
             busy={aiMatches.pending === "related"}
-            disabled={aiMatches.pending !== null}
+            disabled={!aiMatches.allowed || aiMatches.pending !== null}
             loaded={aiMatches.related !== undefined}
             onClick={() => void aiMatches.find("related")}
           />

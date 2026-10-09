@@ -35,8 +35,6 @@ import {
 } from "@t3tools/shared/threadPullRequests";
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
-import { reviewCommentContextId } from "~/lib/composerContextRecords";
-import { removeInlineContextReference } from "~/lib/composerContextReferences";
 
 export const PULL_REQUEST_MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
   merge: "Merge",
@@ -804,27 +802,6 @@ export interface FixFindingsHandoff {
 }
 
 export { handoffPrompt, handoffReviewComments, readableFailure } from "../sourceControl/handoff";
-/**
- * Every chip a hand-off leaves in the composer is named after the pull request it came from —
- * `pull-request-context:`, `pull-request-finding:`, `pull-request-selection:` — which is what
- * tells them apart from the ones a reader marked up in the thread's own diff.
- */
-const HANDOFF_COMMENT_ID_PREFIX = "pull-request-";
-
-/** Removes references owned by the previous PR handoff before its prose is replaced. */
-export function stripPullRequestHandoffReferences(
-  prompt: string,
-  comments: ReadonlyArray<ReviewCommentContext>,
-  retainedIds: ReadonlySet<string> = new Set(),
-): string {
-  let next = prompt;
-  for (const comment of comments) {
-    if (!comment.id.startsWith(HANDOFF_COMMENT_ID_PREFIX) || retainedIds.has(comment.id)) continue;
-    next = removeInlineContextReference(next, reviewCommentContextId(comment.id)).prompt;
-  }
-  return next;
-}
-
 /**
  * The task for handing a pull request's review findings to a fresh thread. Everything derived
  * from the pull request is explicitly marked untrusted: review bodies and check output are

@@ -12,7 +12,6 @@ import {
   sameProjectIssueNumber,
   describeIssueEvent,
   groupIssueTimelineConversations,
-  issueHandoffReviewComments,
   issueCommentEditId,
   mergeIssueComments,
   nextIssueCommentCount,
@@ -20,6 +19,7 @@ import {
   type IssueHandoffSource,
 } from "./issueDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
+import { handoffReviewComments } from "../sourceControl/handoff";
 
 const AUTHOR = { login: "octocat", name: null, avatarUrl: null };
 
@@ -264,6 +264,8 @@ describe("issue timeline", () => {
 
 describe("issue handoffs", () => {
   const source: IssueHandoffSource = {
+    provider: "github",
+    closesViaPullRequest: true,
     number: 812,
     repository: "pingdotgg/t3code",
     title: "Panel is blank after a reload",
@@ -372,6 +374,33 @@ describe("issue handoffs", () => {
     expect(prompt).not.toMatch(/\bAPI\b/u);
   });
 
+  it("closes an issue in another repository by its full URL", () => {
+    const prompt = buildLinkPullRequestsHandoff(source, {
+      ...relatedPullRequest,
+      repository: "pingdotgg/other",
+      url: "https://github.com/pingdotgg/other/pull/7065",
+    }).prompt;
+    expect(prompt).toContain(`Closes ${source.url}`);
+    expect(prompt).not.toContain("Closes #812");
+  });
+
+  it.each([
+    {
+      ...source,
+      provider: "linear",
+      closesViaPullRequest: false,
+      repository: "ENG",
+      url: "https://linear.app/acme/issue/ENG-812",
+    },
+    { ...source, provider: "gitlab", url: "https://gitlab.com/pingdotgg/t3code/-/issues/812" },
+  ])("records only a plain URL for a $provider issue", (issue) => {
+    const prompt = buildLinkPullRequestsHandoff(issue, relatedPullRequest).prompt;
+    expect(prompt).not.toContain("Closes");
+    expect(prompt).toContain(issue.url);
+    expect(prompt).toContain("Do not claim that this closes");
+    expect(prompt).toContain("link_issue_to_pull_request");
+  });
+
   it("bounds the issue text the link hand-off quotes", () => {
     const long = "x".repeat(4_000);
     const [context] = buildLinkPullRequestsHandoff(
@@ -412,7 +441,7 @@ describe("merging a handoff into a composer", () => {
   }
 
   it("takes back the last hand-off's chips and leaves the reader's own", () => {
-    const merged = issueHandoffReviewComments(
+    const merged = handoffReviewComments(
       [chip("issue-context:1"), chip("pull-request-context:9"), chip("review-comment:0:file:1")],
       [chip("issue-context:2")],
     );
@@ -423,7 +452,7 @@ describe("merging a handoff into a composer", () => {
   });
 
   it("attaches to an untouched composer without taking anything away", () => {
-    expect(issueHandoffReviewComments([], [chip("issue-context:2")]).map((c) => c.id)).toEqual([
+    expect(handoffReviewComments([], [chip("issue-context:2")]).map((c) => c.id)).toEqual([
       "issue-context:2",
     ]);
   });

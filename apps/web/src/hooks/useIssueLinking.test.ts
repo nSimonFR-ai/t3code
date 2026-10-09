@@ -79,6 +79,37 @@ describe("resolveIssueUrl", () => {
   });
 });
 
+describe("resolveIssueUrl with two Linear accounts on one team", () => {
+  const url = "https://linear.app/workspace-b/issue/ENG-5/title";
+  const a = project("a", "github.com/acme/a", "github", "acme/a");
+  const b = project("b", "github.com/acme/b", "github", "acme/b");
+  const c = project("c", "github.com/acme/c", "github", "acme/c");
+  const bindings = {
+    a: { repository: "ENG" },
+    b: { repository: "eng" },
+    c: { repository: "OPS" },
+  } as never;
+  const projectFor = (order: ReadonlyArray<EnvironmentProject>, threadProjectId: string) =>
+    resolveIssueUrl({
+      url,
+      projects: order,
+      threadProjectId: threadProjectId as never,
+      linearBindings: bindings,
+    });
+
+  it.each([
+    ["b", "b", [a, b, c]],
+    ["b", "b", [b, a, c]],
+    ["a", "a", [a, b, c]],
+    ["a", "a", [b, a, c]],
+    ["c", "a", [a, b, c]],
+    ["c", "b", [b, a, c]],
+    ["web", "a", [a, b, c]],
+  ])("reads from thread project %s through %s", (threadProjectId, expected, order) => {
+    expect(projectFor(order, threadProjectId)).toMatchObject({ issue: { projectId: expected } });
+  });
+});
+
 describe("findThreadIssueLink", () => {
   const gitlab = {
     provider: "gitlab",
@@ -217,6 +248,63 @@ describe("useIssueLinking operations", () => {
       input: { threadId: threadRef.threadId, issueLink: issue },
     });
   });
+
+  it.each([
+    ["a", "b"],
+    ["b", "a"],
+  ])(
+    "reads Linear through the thread project when %s and %s share its team",
+    async (first, second) => {
+      mocks.configs.mockReturnValue(
+        new Map([
+          [
+            environmentId,
+            {
+              environment: { capabilities: { issues: true } },
+              settings: {
+                issueTracking: {
+                  connections: {
+                    linear: {
+                      projectBindings: { a: { repository: "ENG" }, b: { repository: "ENG" } },
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        ]),
+      );
+      mocks.projects.mockReturnValue([
+        { ...projects[0], id: "b", environmentId: "other" },
+        { ...projects[0], id: first },
+        { ...projects[0], id: second },
+      ]);
+      mocks.thread.mockReturnValue({ projectId: ProjectId.make("b"), issues: [] });
+      const url = "https://linear.app/workspace-b/issue/ENG-5/title";
+      mocks.detail.mockResolvedValue(
+        AsyncResult.success({
+          ...issue,
+          projectId: "b",
+          provider: "linear",
+          repository: "ENG",
+          number: 5,
+          url,
+        }),
+      );
+      await useIssueLinking(environmentId).changeLink(threadRef, url, true);
+      expect(mocks.detail).toHaveBeenCalledExactlyOnceWith({
+        environmentId,
+        input: {
+          projectId: "b",
+          provider: "linear",
+          host: "linear.app",
+          repository: "ENG",
+          number: 5,
+        },
+      });
+      expect(mocks.update).toHaveBeenCalledOnce();
+    },
+  );
 
   it("unlinks a saved GitLab issue through its work_items alias after its project is gone", async () => {
     mocks.projects.mockReturnValue([]);

@@ -1,4 +1,5 @@
-import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { useAtomValue } from "@effect/atom-react";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
@@ -30,7 +31,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
+import type { DraftId } from "~/composerDraftStore";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
@@ -47,7 +48,7 @@ import { PULL_REQUEST_STATE_PRESENTATION } from "../pullRequest/pullRequestIcons
 import { PullRequestMarkdownContext } from "../pullRequest/PullRequestMarkdown";
 import { PullRequestActorLabel, PullRequestMetaLine } from "../pullRequest/pullRequestPresentation";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
-import { handoffPrompt, readableFailure } from "../sourceControl/handoff";
+import { readableFailure, writeHandoffToComposer } from "../sourceControl/handoff";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -71,7 +72,6 @@ import {
   buildLinkPullRequestsHandoff,
   buildSolveIssueHandoff,
   sameProjectIssueNumber,
-  issueHandoffReviewComments,
   LINK_PULL_REQUESTS_HANDOFF_KIND,
   mergeIssueComments,
   shouldRefreshIssueActivity,
@@ -143,17 +143,6 @@ export type IssueHandoffTarget =
       readonly draftId: ScopedThreadRef | DraftId;
     };
 
-/**
- * What the last hand-off wrote into each composer, kept outside React because the panel that wrote
- * it is closed by the time the next one opens. It is how a prompt the reader has since edited is
- * told apart from the one they were handed: only the sentence still exactly as written may be
- * replaced.
- */
-const lastHandoffPromptByDraft = new Map<string, string>();
-
-const draftKey = (target: ScopedThreadRef | DraftId): string =>
-  typeof target === "string" ? target : scopedThreadKey(target);
-
 export function IssueDetailPanel({
   environmentId,
   panelRef = null,
@@ -197,7 +186,11 @@ export function IssueDetailPanel({
    */
   onOpenLinkedPullRequest?: (link: IssueLinkedPullRequest) => void;
   /** Opens another issue of this tracker project in place; without it, on the tracker. */
-  onOpenRelatedIssue?: (issue: { readonly number: number; readonly url: string }) => void;
+  onOpenRelatedIssue?: (issue: {
+    readonly repository?: string | undefined;
+    readonly number: number;
+    readonly url: string;
+  }) => void;
   /**
    * How the metadata above the content behaves: `full` keeps every row pinned; `collapse`
    * folds the whole of it into the top row once the active tab scrolls, and unfolds at the
@@ -276,6 +269,7 @@ export function IssueDetailPanel({
   );
   const coreDetail = detailQuery.data;
   const activity = activityQuery.data;
+  const canWrite = useAtomValue(issueEnvironment.update.permissionAtom(environmentId));
   const commentsKey = `${issueKey}:${coreDetail?.updatedAt}`;
   const loadedPage = loadedComments?.key === commentsKey ? loadedComments : null;
   const detail = useMemo(
@@ -284,6 +278,23 @@ export function IssueDetailPanel({
         ? null
         : {
             ...coreDetail,
+            ...(canWrite
+              ? {}
+              : {
+                  capabilities: {
+                    ...coreDetail.capabilities,
+                    reactions: false,
+                    editComment: false,
+                  },
+                  viewerPermissions: {
+                    actions: [],
+                    comment: false,
+                    edit: false,
+                    labels: false,
+                    assignees: false,
+                    create: false,
+                  },
+                }),
             author: activity?.author ?? coreDetail.author,
             comments: mergeIssueComments(activity?.comments ?? [], loadedPage?.comments ?? []),
             // The host's own count, which the core read already carries: the conversation being
@@ -298,7 +309,7 @@ export function IssueDetailPanel({
             events: activity?.events ?? [],
             ...(activity?.reactions === undefined ? {} : { reactions: activity.reactions }),
           },
-    [activity, coreDetail, loadedPage],
+    [activity, canWrite, coreDetail, loadedPage],
   );
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
@@ -360,7 +371,7 @@ export function IssueDetailPanel({
   // Core detail is cheap enough to re-read while this stays open. Activity is heavier, so the
   // revision effect above reads it only after this same issue reports a change.
   useLiveRefresh(detailQuery.refresh, {
-    key: `issue:${issueKey}`,
+    key: `issue:${environmentId}:${issueKey}`,
   });
   // The button, on the other hand, goes around the server's cache rather than through it: it is
   // the answer for a reader who can see that what they are looking at is behind. The
@@ -395,7 +406,7 @@ export function IssueDetailPanel({
     reason?: IssueCloseReason,
     body?: string,
   ) => {
-    if (actionPending) return { commentPosted: false };
+    if (actionPending || !canWrite) return { commentPosted: false };
     setActionPending(true);
     if (body !== undefined) {
       const commentResult = await postComment({ environmentId, input: { ...target, body } });
@@ -446,34 +457,14 @@ export function IssueDetailPanel({
       ? handoffTarget.draftId
       : null;
 
-  const writeHandoff = (target: ScopedThreadRef | DraftId, task: IssueHandoff) => {
-    const store = useComposerDraftStore.getState();
-    // The latest press is the ask: it takes over what an earlier hand-off left, prompt and chips
-    // both, rather than stacking a second one under the first. What the reader typed themselves
-    // survives — the composer they are handed is not always a fresh one, and a prompt they have
-    // since edited is theirs rather than the hand-off's.
-    const draft = store.getComposerDraft(target);
-    const key = draftKey(target);
-    const prompt = handoffPrompt(
-      { prompt: draft?.prompt ?? "", lastHandoffPrompt: lastHandoffPromptByDraft.get(key) },
-      task.prompt,
-    );
-    // Remember the hand-off's own contribution, not the merged prompt: only that sentence is
-    // this panel's to take back next time, and the reader's text around it is not.
-    lastHandoffPromptByDraft.set(key, task.prompt);
-    store.setPrompt(target, prompt);
-    store.setReviewComments(
-      target,
-      issueHandoffReviewComments(draft?.reviewComments ?? [], task.reviewComments),
-    );
-  };
-
   const startHandoff = async (
     kind: string,
     build: (source: IssueHandoffSource) => IssueHandoff,
   ) => {
     if (!detail || handoff !== null || activityPending) return;
     const task = build({
+      provider: detail.provider,
+      closesViaPullRequest: detail.capabilities.closesViaPullRequest,
       number: detail.number,
       repository: detail.repository,
       title: detail.title,
@@ -490,7 +481,7 @@ export function IssueDetailPanel({
         ? "The task is in the composer — read it over, then send."
         : "The issue is in the composer — type your message, then send.";
     if (kind !== "solve" && inPlaceDraft !== null) {
-      writeHandoff(inPlaceDraft, task);
+      writeHandoffToComposer(inPlaceDraft, task);
       toastManager.add({ type: "success", title: "Added to this thread", description });
       return;
     }
@@ -511,7 +502,7 @@ export function IssueDetailPanel({
       });
       return;
     }
-    writeHandoff(opened.draftId, task);
+    writeHandoffToComposer(opened.draftId, task);
     toastManager.add({ type: "success", title: "Opened in a thread", description });
   };
 
@@ -544,7 +535,11 @@ export function IssueDetailPanel({
       : null;
   const markdownRepositoryUrl = detail?.repositoryUrl ?? null;
   const openRelatedIssue = useCallback(
-    (issue: { readonly number: number; readonly url: string }) =>
+    (issue: {
+      readonly repository?: string | undefined;
+      readonly number: number;
+      readonly url: string;
+    }) =>
       onOpenRelatedIssue === undefined ? openLinkInBrowser(issue.url) : onOpenRelatedIssue(issue),
     [onOpenRelatedIssue],
   );
@@ -1116,7 +1111,7 @@ export function IssueDetailPanel({
         ) : null}
       </div>
 
-      {detail && detail.capabilities.comment && detail.viewerPermissions.comment ? (
+      {detail && coreDetail?.capabilities.comment && coreDetail.viewerPermissions.comment ? (
         <div className="absolute right-4 bottom-3 z-20">
           <CommentComposer
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
@@ -1124,7 +1119,7 @@ export function IssueDetailPanel({
             detail={detail}
             label="Comment on this issue"
             command={issueEnvironment.comment}
-            actionPending={actionPending}
+            actionPending={actionPending || !canWrite}
             followUpAction={
               detail.state === "open" && can("close")
                 ? "close"
@@ -1158,10 +1153,10 @@ export function IssueDetailPanel({
             <Button
               size="sm"
               variant="outline"
-              disabled={actionPending}
+              disabled={actionPending || !canWrite}
               onClick={() => {
                 const pending = confirmClose;
-                if (!pending) return;
+                if (!pending || !canWrite) return;
                 setConfirmClose(null);
                 void perform("close", pending.reference, pending.reason ?? undefined);
               }}

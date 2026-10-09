@@ -1136,6 +1136,42 @@ layer("GitLabIssueCli.layer", (it) => {
     }),
   );
 
+  it.effect("stops unsent template reads when a body request is rate-limited", () =>
+    Effect.gen(function* () {
+      const rateLimit = new GitLabCli.GitLabCliRateLimitError({
+        operation: "execute",
+        command: "glab",
+        cwd: "/w",
+        cause: new Error("429 Too Many Requests"),
+      });
+      mockedExecute.mockImplementation((input) =>
+        input.args[1] === "projects/acme%2Fweb/templates/issues"
+          ? Effect.succeed(
+              output(
+                templateEntries(
+                  Array.from({ length: 8 }, (_, index) => ({
+                    key: `${index}.md`,
+                    name: `Template ${index}`,
+                  })),
+                ),
+              ),
+            )
+          : Effect.fail(rateLimit),
+      );
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      const result = yield* cli
+        .listIssueTemplates({ cwd: "/w", repository: "acme/web" })
+        .pipe(Effect.result);
+
+      assert.strictEqual(result._tag, "Failure");
+      if (result._tag === "Failure") assert.strictEqual(result.failure, rateLimit);
+      expect(mockedExecute.mock.calls.map(([input]) => input.args[1])).not.toContain(
+        "projects/acme%2Fweb/templates/issues/4.md",
+      );
+    }),
+  );
+
   it.effect("skips a listing row that cannot be decoded, and reads the rest", () =>
     Effect.gen(function* () {
       mockedExecute.mockImplementation((input) => {

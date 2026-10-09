@@ -8,8 +8,10 @@ import {
   IssueCreateInput,
   IssueDetail,
   IssueListInput,
+  ISSUE_LIST_CURSOR_MAX_LENGTH,
   IssueListResult,
   IssueRef,
+  IssueRelativeNode,
   IssueTemplateList,
   issueTemplateAnswersComplete,
   IssueUpdateInput,
@@ -114,6 +116,14 @@ describe("IssueListResult", () => {
     expect(decoded).toStrictEqual(LIST_RESULT);
   });
 
+  it("round-trips a stopped continuation through the JSON codec", () => {
+    const codec = Schema.toCodecJson(IssueListResult);
+    const result = { ...LIST_RESULT, truncated: true, cursorLimitReached: true, nextCursors: {} };
+    expect(Schema.decodeUnknownSync(codec)(Schema.encodeUnknownSync(codec)(result))).toStrictEqual(
+      result,
+    );
+  });
+
   it("keys a viewer by adapter and host, so accounts never cross", () => {
     const enterprise = issueSourceKey("github", "github.acme.dev");
     const jira = issueSourceKey("jira", "github.com");
@@ -199,8 +209,12 @@ describe("IssueListInput", () => {
 
   it("bounds a continuation, because it comes back from the page and goes into a filter", () => {
     const long = (length: number) => ({ "github.com acme/web": "c".repeat(length) });
-    expect(decodeListInput({ state: "open", cursors: long(4096) })).toBeDefined();
-    expect(() => decodeListInput({ state: "open", cursors: long(4097) })).toThrow();
+    expect(
+      decodeListInput({ state: "open", cursors: long(ISSUE_LIST_CURSOR_MAX_LENGTH) }),
+    ).toBeDefined();
+    expect(() =>
+      decodeListInput({ state: "open", cursors: long(ISSUE_LIST_CURSOR_MAX_LENGTH + 1) }),
+    ).toThrow();
   });
 });
 
@@ -241,6 +255,28 @@ describe("IssueUpdateInput", () => {
 });
 
 describe("IssueDetail", () => {
+  it("round-trips cross-repository sub-issues and accepts relatives without a repository", () => {
+    const legacy = {
+      number: 7,
+      title: "Slice",
+      url: "https://linear.app/acme/issue/ENG-7",
+      state: "open",
+      subIssues: [],
+    };
+    const tree = {
+      ...legacy,
+      repository: "acme/web",
+      url: "https://github.com/acme/web/issues/7",
+      subIssues: [
+        { ...legacy, repository: "acme/api", url: "https://github.com/acme/api/issues/7" },
+      ],
+    };
+    const codec = Schema.toCodecJson(IssueRelativeNode);
+    for (const node of [legacy, tree]) {
+      expect(Schema.decodeSync(codec)(Schema.encodeUnknownSync(codec)(node))).toEqual(node);
+    }
+  });
+
   it("carries the change requests that reference it, marking the ones that close it", () => {
     const detail = decodeDetail({
       provider: "github",

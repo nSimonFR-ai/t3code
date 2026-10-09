@@ -56,6 +56,7 @@ const VIEWER_PERMISSIONS: IssueViewerPermissions = {
 function reasonFor(error: GitLabIssueCli.GitLabIssueCliError): IssueProviderError["reason"] {
   if (error._tag === "GitLabCliUnavailableError") return "missing-tool";
   if (error._tag === "GitLabCliAuthenticationError") return "unauthenticated";
+  if (error._tag === "GitLabCliRateLimitError") return "rate-limited";
   // Never `tracker-disabled`: GitLab answers a project with its issues switched off with the same
   // 404 as a mistyped path or a deleted issue, so claiming the tracker is off would explain a
   // typo as a setting nobody changed.

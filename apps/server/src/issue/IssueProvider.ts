@@ -103,6 +103,7 @@ export interface ProviderListCursor {
    */
   readonly updatedBefore: string;
   readonly seenAt?: ReadonlyArray<number> | undefined;
+  readonly seenAtByRepository?: Readonly<Record<string, ReadonlyArray<number>>> | undefined;
 }
 
 /** One repository's row inside an answer that spans several of them. */
@@ -119,6 +120,7 @@ export interface ProviderBatchedIssue extends ProviderIssue {
 export interface ProviderBatchedIssuePage {
   readonly items: ReadonlyArray<ProviderBatchedIssue>;
   readonly truncated: boolean;
+  readonly ceilingReached?: boolean;
 }
 
 export interface ProviderIssueDetail extends ProviderIssue {
