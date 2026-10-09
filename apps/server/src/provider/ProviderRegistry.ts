@@ -33,6 +33,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProvider,
+  type ServerProviderSlashCommand,
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -205,6 +206,32 @@ export function upsertProviderWorkspaceSnapshot(
       ...(provider.workspaceSnapshots ?? []).filter((snapshot) => snapshot.cwd !== cwd),
       workspaceSnapshot,
     ].slice(-MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER),
+  };
+}
+
+/**
+ * Adds slash commands a live session reported to a cwd that already has a
+ * workspace snapshot. Existing entries win; without a snapshot the next scan
+ * of that cwd picks the commands up from the driver.
+ */
+export function addSessionSlashCommands(
+  provider: ServerProvider,
+  cwd: string,
+  slashCommands: ReadonlyArray<ServerProviderSlashCommand>,
+): ServerProvider {
+  const workspaceSnapshots = provider.workspaceSnapshots;
+  const snapshot = workspaceSnapshots?.find((candidate) => candidate.cwd === cwd);
+  if (workspaceSnapshots === undefined || snapshot === undefined) return provider;
+  const known = new Set(snapshot.slashCommands.map((command) => command.name.toLowerCase()));
+  const added = slashCommands.filter((command) => !known.has(command.name.toLowerCase()));
+  if (added.length === 0) return provider;
+  return {
+    ...provider,
+    workspaceSnapshots: workspaceSnapshots.map((candidate) =>
+      candidate === snapshot
+        ? { ...candidate, slashCommands: [...candidate.slashCommands, ...added] }
+        : candidate,
+    ),
   };
 }
 
@@ -536,6 +563,21 @@ export const layer = Layer.effect(
     const liveSubsRef = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ProviderInstance>>(
       new Map(),
     );
+    const updateProviders = (
+      update: (providers: ReadonlyArray<ServerProvider>) => ReadonlyArray<ServerProvider>,
+    ) =>
+      Ref.modify(providersRef, (currentProviders) => {
+        const nextProviders = update(currentProviders);
+        return [[currentProviders, nextProviders] as const, nextProviders];
+      }).pipe(
+        Effect.tap(([previousProviders, nextProviders]) =>
+          haveProvidersChanged(previousProviders, nextProviders)
+            ? PubSub.publish(changesPubSub, nextProviders)
+            : Effect.void,
+        ),
+        Effect.map(([, nextProviders]) => nextProviders),
+      );
+
     // Serialize `syncLiveSources` so a rapid burst of reconciles doesn't
     // interleave two passes clobbering each other's fiber bookkeeping.
     const syncSemaphore = yield* Semaphore.make(1);
@@ -890,6 +932,17 @@ export const layer = Layer.effect(
           yield* Stream.runForEach(source.streamChanges, (provider) =>
             correlateSnapshotWithSource(source, provider).pipe(Effect.flatMap(syncProvider)),
           ).pipe(Effect.forkScoped);
+          if (instance.sessionSlashCommands !== undefined) {
+            yield* Stream.runForEach(instance.sessionSlashCommands, (update) =>
+              updateProviders((providers) =>
+                providers.map((candidate) =>
+                  candidate.instanceId === instance.instanceId
+                    ? addSessionSlashCommands(candidate, update.cwd, update.slashCommands)
+                    : candidate,
+                ),
+              ),
+            ).pipe(Effect.forkScoped);
+          }
         }
         yield* Effect.yieldNow;
 
@@ -1021,21 +1074,6 @@ export const layer = Layer.effect(
       });
       return yield* Ref.get(providersRef);
     });
-
-    const updateProviders = (
-      update: (providers: ReadonlyArray<ServerProvider>) => ReadonlyArray<ServerProvider>,
-    ) =>
-      Ref.modify(providersRef, (currentProviders) => {
-        const nextProviders = update(currentProviders);
-        return [[currentProviders, nextProviders] as const, nextProviders];
-      }).pipe(
-        Effect.tap(([previousProviders, nextProviders]) =>
-          haveProvidersChanged(previousProviders, nextProviders)
-            ? PubSub.publish(changesPubSub, nextProviders)
-            : Effect.void,
-        ),
-        Effect.map(([, nextProviders]) => nextProviders),
-      );
 
     const refreshWorkspaceSnapshot = Effect.fn("refreshWorkspaceSnapshot")(function* (input: {
       readonly instanceId: ProviderInstanceId;

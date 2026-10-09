@@ -247,7 +247,7 @@ type ClaudeCapabilitiesProbe = {
   readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
 };
 
-function parseClaudeInitializationCommands(
+export function parseClaudeInitializationCommands(
   commands: ReadonlyArray<ClaudeSlashCommand> | undefined,
 ): ReadonlyArray<ServerProviderSlashCommand> {
   return dedupeSlashCommands(
@@ -269,6 +269,14 @@ function parseClaudeInitializationCommands(
       ];
     }),
   );
+}
+
+/** Adds commands a live session reported; the probed entry wins on a name clash. */
+export function mergeClaudeSessionSlashCommands(
+  base: ReadonlyArray<ServerProviderSlashCommand>,
+  session: ReadonlyArray<ServerProviderSlashCommand>,
+): ReadonlyArray<ServerProviderSlashCommand> {
+  return dedupeSlashCommands([...base, ...session]);
 }
 
 function dedupeSlashCommands(

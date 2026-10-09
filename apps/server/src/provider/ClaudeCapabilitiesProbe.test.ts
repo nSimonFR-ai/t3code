@@ -21,6 +21,8 @@ import * as Schema from "effect/Schema";
 import {
   buildClaudeCapabilitiesProbeQueryOptions,
   CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES,
+  mergeClaudeSessionSlashCommands,
+  parseClaudeInitializationCommands,
   probeClaudeCapabilities,
   probeClaudeWorkspaceSnapshot,
 } from "./ClaudeProvider.ts";
@@ -29,6 +31,21 @@ import { COMPACT_SLASH_COMMAND } from "@t3tools/provider-core/server/snapshotPro
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
+
+it("merges live-session commands behind the probed ones", () => {
+  const session = parseClaudeInitializationCommands([
+    { name: "review", description: "Session review", argumentHint: "<pr>" },
+    { name: "mod-command", description: "From a mod", argumentHint: "<arg>" },
+  ]);
+
+  assert.deepEqual(
+    mergeClaudeSessionSlashCommands([{ name: "review", description: "Probed review" }], session),
+    [
+      { name: "review", description: "Probed review", input: { hint: "<pr>" } },
+      { name: "mod-command", description: "From a mod", input: { hint: "<arg>" } },
+    ],
+  );
+});
 
 it("isolates Claude capability probes without dropping workspace setting sources", () => {
   const abortController = new AbortController();

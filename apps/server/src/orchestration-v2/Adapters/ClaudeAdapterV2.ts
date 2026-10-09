@@ -25,6 +25,7 @@ import {
   type SDKRateLimitInfo,
   type SDKResultMessage,
   type SDKUserMessage,
+  type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AskUserQuestionInput,
@@ -335,6 +336,10 @@ export interface ClaudeAgentSdkQuerySession {
   readonly setPermissionMode: (
     mode: PermissionMode,
   ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+  readonly supportedCommands: Effect.Effect<
+    ReadonlyArray<SlashCommand>,
+    ClaudeAgentSdkQueryRunnerError
+  >;
   readonly interrupt: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly close: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
 }
@@ -702,6 +707,10 @@ export const layerQueryRunner: Layer.Layer<
                 }),
               ),
             ),
+          supportedCommands: Effect.tryPromise({
+            try: () => queryRuntime.supportedCommands(),
+            catch: (cause) => queryRunnerError(cause, "supportedCommands"),
+          }),
           interrupt: Effect.tryPromise({
             try: () => queryRuntime.interrupt(),
             catch: (cause) => queryRunnerError(cause, "interrupt"),
@@ -3008,6 +3017,15 @@ export interface ClaudeAdapterV2Options {
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
   readonly onUsageLimits?: ServerProviderShape["applyUsageLimits"];
+  /**
+   * Receives the slash commands a live session reports, including ones plugins
+   * register at runtime. The capabilities probe runs with hooks off and never
+   * sees those.
+   */
+  readonly onSessionCommands?: (input: {
+    readonly cwd: string;
+    readonly commands: ReadonlyArray<SlashCommand>;
+  }) => Effect.Effect<void>;
   /** Sink for wake-turn continuation requests; defaults to dropping them. */
   readonly continuationRequests?: {
     readonly offer: (
@@ -7413,6 +7431,27 @@ export function makeClaudeAdapterV2(
             ),
           };
           yield* Ref.set(queryContext, context);
+          const reportSessionCommands = adapterOptions.onSessionCommands;
+          const sessionCwd = turnInput.runtimePolicy.cwd;
+          // Best effort and off the message loop: a slow or failing command
+          // lookup must not hold up or fail the turn.
+          const forkSessionCommandsReport = (
+            commands: Effect.Effect<ReadonlyArray<SlashCommand>, ClaudeAgentSdkQueryRunnerError>,
+          ) =>
+            reportSessionCommands === undefined || sessionCwd === null
+              ? Effect.void
+              : commands.pipe(
+                  Effect.flatMap((list) =>
+                    reportSessionCommands({ cwd: sessionCwd, commands: list }),
+                  ),
+                  Effect.catchCause((cause) =>
+                    Effect.logDebug("orchestration-v2.claude-session-commands-report-failed", {
+                      cause,
+                    }),
+                  ),
+                  Effect.forkIn(sessionScope),
+                  Effect.asVoid,
+                );
           yield* querySession.messages.pipe(
             Stream.runForEach((message) => {
               if (
@@ -7422,7 +7461,17 @@ export function makeClaudeAdapterV2(
               ) {
                 context.permissionMode = message.permissionMode;
               }
-              return handleSdkMessage({ query: querySession, message });
+              const sessionCommandsReport =
+                message.type !== "system"
+                  ? Effect.void
+                  : message.subtype === "init"
+                    ? forkSessionCommandsReport(querySession.supportedCommands)
+                    : message.subtype === "commands_changed"
+                      ? forkSessionCommandsReport(Effect.succeed(message.commands))
+                      : Effect.void;
+              return sessionCommandsReport.pipe(
+                Effect.andThen(handleSdkMessage({ query: querySession, message })),
+              );
             }),
             Effect.exit,
             Effect.flatMap(
@@ -8157,7 +8206,10 @@ export type ClaudeAdapterV2DriverEnv =
 export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
   function* (
     input: ProviderAdapterDriverCreateInput<ClaudeSettings>,
-    hooks: Pick<ClaudeAdapterV2Options, "scopedLimitNames" | "onUsageLimits"> = {},
+    hooks: Pick<
+      ClaudeAdapterV2Options,
+      "scopedLimitNames" | "onUsageLimits" | "onSessionCommands"
+    > = {},
   ) {
     const { instanceId, environment, enabled, config } = input;
     const fileSystem = yield* FileSystem.FileSystem;
