@@ -1,6 +1,6 @@
 import { formatIssueReference } from "@t3tools/contracts";
+import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 import {
-  formatProviderSkillDisplayName,
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
 } from "@t3tools/client-runtime/providerSkills";

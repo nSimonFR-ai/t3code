@@ -21,7 +21,7 @@ export function UnavailableState({
   refreshing?: boolean;
 }) {
   return (
-    <Empty className="min-h-0 justify-center-safe overflow-y-auto [&>*]:shrink-0">
+    <Empty className="scrollbar-gutter-both min-h-0 justify-center-safe overflow-y-auto [&>*]:shrink-0">
       <EmptyMedia variant="icon">{icon}</EmptyMedia>
       <EmptyHeader>
         <EmptyTitle>{title}</EmptyTitle>
