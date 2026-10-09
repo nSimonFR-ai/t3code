@@ -685,7 +685,7 @@ it.layer(
       assert.strictEqual(recovered.workspaceSnapshots?.[0]?.slashCommandsPending, undefined);
     });
 
-    it("adds session slash commands only to the cwd that has a workspace snapshot", () => {
+    it("replaces slash commands only for the cwd that has a workspace snapshot", () => {
       const baseProvider = {
         instanceId: ProviderInstanceId.make("claudeAgent"),
         driver: ProviderDriverKind.make("claudeAgent"),
@@ -716,15 +716,13 @@ it.layer(
         scoped([{ name: "other" }]),
       );
 
-      const result = ProviderRegistry.addSessionSlashCommands(provider, "/project", [
-        { name: "Review", description: "Session description" },
+      const result = ProviderRegistry.replaceWorkspaceSlashCommands(provider, "/project", [
         { name: "mod-command", description: "From a mod", input: { hint: "<arg>" } },
       ]);
 
       const snapshotOf = (candidate: ServerProvider, cwd: string) =>
         candidate.workspaceSnapshots?.find((snapshot) => snapshot.cwd === cwd);
       assert.deepStrictEqual(snapshotOf(result, "/project")?.slashCommands, [
-        { name: "review", description: "Review changes" },
         { name: "mod-command", description: "From a mod", input: { hint: "<arg>" } },
       ]);
       assert.strictEqual(snapshotOf(result, "/project")?.checkedAt, "2026-03-25T00:01:00.000Z");
@@ -734,9 +732,11 @@ it.layer(
       assert.deepStrictEqual(snapshotOf(result, "/other"), snapshotOf(provider, "/other"));
       assert.deepStrictEqual(result.slashCommands, provider.slashCommands);
 
-      const withoutSnapshot = ProviderRegistry.addSessionSlashCommands(provider, "/unscanned", [
-        { name: "mod-command" },
-      ]);
+      const withoutSnapshot = ProviderRegistry.replaceWorkspaceSlashCommands(
+        provider,
+        "/unscanned",
+        [{ name: "mod-command" }],
+      );
       assert.strictEqual(withoutSnapshot, provider);
     });
 

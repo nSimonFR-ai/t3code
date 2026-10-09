@@ -2269,6 +2269,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       Effect.sync(() => {
         reported.push({ cwd: input.cwd, names: input.commands.map((command) => command.name) });
       });
+    const commandsChanged = claudeSdkFrame({
+      type: "system",
+      subtype: "commands_changed",
+      commands: [{ name: "later-command", description: "", argumentHint: "" }],
+      uuid: "00000000-0000-4000-8000-000000000111",
+      session_id: WAKE_NATIVE_SESSION,
+    });
     const startTurn = Effect.fnUntraced(function* (
       harness: Effect.Success<ReturnType<typeof makeWakeHarnessWithOptions>>,
     ) {
@@ -2295,23 +2302,39 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         });
         yield* startTurn(harness);
         yield* harness.offerAndWait(wakeTurnInit);
-        yield* harness.offerAndWait(
-          claudeSdkFrame({
-            type: "system",
-            subtype: "commands_changed",
-            commands: [{ name: "later-command", description: "", argumentHint: "" }],
-            uuid: "00000000-0000-4000-8000-000000000111",
-            session_id: WAKE_NATIVE_SESSION,
-          }),
-        );
+        yield* awaitUntil(() => reported.length === 1, "the init command report");
+        yield* harness.offerAndWait(commandsChanged);
         yield* harness.offerAndWait(turnOneResult);
         yield* Queue.take(harness.terminalReceipts);
 
-        yield* awaitUntil(() => reported.length === 2, "both command reports");
-        assert.sameDeepMembers(reported, [
+        assert.deepEqual(reported, [
           { cwd: "/workspace", names: ["mod-command"] },
           { cwd: "/workspace", names: ["later-command"] },
         ]);
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    );
+
+    it.effect("drops an init lookup that finishes after a newer commands_changed list", () =>
+      Effect.gen(function* () {
+        reported.length = 0;
+        const releaseLookup = yield* Deferred.make<void>();
+        const lookupDone = yield* Deferred.make<void>();
+        const harness = yield* makeWakeHarnessWithOptions({
+          onSessionCommands,
+          supportedCommands: Deferred.await(releaseLookup).pipe(
+            Effect.as([{ name: "startup-command", description: "", argumentHint: "" }]),
+            Effect.ensuring(Deferred.succeed(lookupDone, undefined)),
+          ),
+        });
+        yield* startTurn(harness);
+        yield* harness.offerAndWait(wakeTurnInit);
+        yield* harness.offerAndWait(commandsChanged);
+        yield* Deferred.succeed(releaseLookup, undefined);
+        yield* Deferred.await(lookupDone);
+        yield* harness.offerAndWait(turnOneResult);
+        yield* Queue.take(harness.terminalReceipts);
+
+        assert.deepEqual(reported, [{ cwd: "/workspace", names: ["later-command"] }]);
       }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     );
 

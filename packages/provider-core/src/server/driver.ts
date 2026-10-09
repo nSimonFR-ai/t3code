@@ -94,7 +94,10 @@ export interface ProviderInstance {
   readonly refreshModels?: () => Effect.Effect<void, ProviderDriverError>;
   /** Invalidate T3-owned discovery caches before an explicit provider refresh. */
   readonly invalidateCaches?: Effect.Effect<void>;
-  /** Slash commands a live session reports for a cwd, beyond what the snapshot probe finds. */
+  /**
+   * The complete slash command list for a cwd, pushed when a live session
+   * changes the commands beyond what `snapshotForCwd` probed.
+   */
   readonly sessionSlashCommands?: Stream.Stream<{
     readonly cwd: string;
     readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;

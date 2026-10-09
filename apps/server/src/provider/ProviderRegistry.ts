@@ -210,27 +210,19 @@ export function upsertProviderWorkspaceSnapshot(
 }
 
 /**
- * Adds slash commands a live session reported to a cwd that already has a
- * workspace snapshot. Existing entries win; without a snapshot the next scan
- * of that cwd picks the commands up from the driver.
+ * Replaces the slash commands of a cwd that already has a workspace snapshot.
+ * Without a snapshot the next scan of that cwd gets the commands from the driver.
  */
-export function addSessionSlashCommands(
+export function replaceWorkspaceSlashCommands(
   provider: ServerProvider,
   cwd: string,
   slashCommands: ReadonlyArray<ServerProviderSlashCommand>,
 ): ServerProvider {
-  const workspaceSnapshots = provider.workspaceSnapshots;
-  const snapshot = workspaceSnapshots?.find((candidate) => candidate.cwd === cwd);
-  if (workspaceSnapshots === undefined || snapshot === undefined) return provider;
-  const known = new Set(snapshot.slashCommands.map((command) => command.name.toLowerCase()));
-  const added = slashCommands.filter((command) => !known.has(command.name.toLowerCase()));
-  if (added.length === 0) return provider;
+  if (!provider.workspaceSnapshots?.some((candidate) => candidate.cwd === cwd)) return provider;
   return {
     ...provider,
-    workspaceSnapshots: workspaceSnapshots.map((candidate) =>
-      candidate === snapshot
-        ? { ...candidate, slashCommands: [...candidate.slashCommands, ...added] }
-        : candidate,
+    workspaceSnapshots: provider.workspaceSnapshots.map((candidate) =>
+      candidate.cwd === cwd ? { ...candidate, slashCommands } : candidate,
     ),
   };
 }
@@ -937,7 +929,7 @@ export const layer = Layer.effect(
               updateProviders((providers) =>
                 providers.map((candidate) =>
                   candidate.instanceId === instance.instanceId
-                    ? addSessionSlashCommands(candidate, update.cwd, update.slashCommands)
+                    ? replaceWorkspaceSlashCommands(candidate, update.cwd, update.slashCommands)
                     : candidate,
                 ),
               ),

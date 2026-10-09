@@ -83,6 +83,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -7431,27 +7432,40 @@ export function makeClaudeAdapterV2(
             ),
           };
           yield* Ref.set(queryContext, context);
-          const reportSessionCommands = adapterOptions.onSessionCommands;
+          const onSessionCommands = adapterOptions.onSessionCommands;
           const sessionCwd = turnInput.runtimePolicy.cwd;
-          // Best effort and off the message loop: a slow or failing command
-          // lookup must not hold up or fail the turn.
-          const forkSessionCommandsReport = (
-            commands: Effect.Effect<ReadonlyArray<SlashCommand>, ClaudeAgentSdkQueryRunnerError>,
-          ) =>
-            reportSessionCommands === undefined || sessionCwd === null
+          // The `init` lookup runs off the message loop, so a slow or failing
+          // lookup cannot hold up or fail the turn. It reports only if no
+          // `commands_changed` list arrived after it started; the lock makes
+          // that check and the report one step.
+          const sessionCommandsLock = yield* Semaphore.make(1);
+          let latestSessionCommandsReport = 0;
+          const reportSessionCommands = (report: number, commands: ReadonlyArray<SlashCommand>) =>
+            onSessionCommands === undefined || sessionCwd === null
               ? Effect.void
-              : commands.pipe(
-                  Effect.flatMap((list) =>
-                    reportSessionCommands({ cwd: sessionCwd, commands: list }),
+              : sessionCommandsLock.withPermits(1)(
+                  Effect.suspend(() =>
+                    report === latestSessionCommandsReport
+                      ? onSessionCommands({ cwd: sessionCwd, commands })
+                      : Effect.void,
                   ),
-                  Effect.catchCause((cause) =>
-                    Effect.logDebug("orchestration-v2.claude-session-commands-report-failed", {
-                      cause,
-                    }),
-                  ),
-                  Effect.forkIn(sessionScope),
-                  Effect.asVoid,
                 );
+          const forkInitSessionCommandsReport = Effect.suspend(() => {
+            if (onSessionCommands === undefined || sessionCwd === null) return Effect.void;
+            const report = ++latestSessionCommandsReport;
+            return querySession.supportedCommands.pipe(
+              Effect.flatMap((commands) => reportSessionCommands(report, commands)),
+              Effect.catchCause((cause) =>
+                Effect.logDebug("orchestration-v2.claude-session-commands-report-failed", {
+                  cause,
+                }),
+              ),
+              Effect.forkIn(sessionScope),
+              Effect.asVoid,
+            );
+          });
+          const reportChangedSessionCommands = (commands: ReadonlyArray<SlashCommand>) =>
+            Effect.suspend(() => reportSessionCommands(++latestSessionCommandsReport, commands));
           yield* querySession.messages.pipe(
             Stream.runForEach((message) => {
               if (
@@ -7465,9 +7479,9 @@ export function makeClaudeAdapterV2(
                 message.type !== "system"
                   ? Effect.void
                   : message.subtype === "init"
-                    ? forkSessionCommandsReport(querySession.supportedCommands)
+                    ? forkInitSessionCommandsReport
                     : message.subtype === "commands_changed"
-                      ? forkSessionCommandsReport(Effect.succeed(message.commands))
+                      ? reportChangedSessionCommands(message.commands)
                       : Effect.void;
               return sessionCommandsReport.pipe(
                 Effect.andThen(handleSdkMessage({ query: querySession, message })),

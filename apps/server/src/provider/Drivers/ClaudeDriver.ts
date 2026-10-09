@@ -46,10 +46,12 @@ import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import {
   checkClaudeProviderStatus,
   makePendingClaudeProvider,
-  mergeClaudeSessionSlashCommands,
   parseClaudeInitializationCommands,
   probeClaudeCapabilities,
   probeClaudeWorkspaceSnapshot,
+  recordClaudeProbedSlashCommands,
+  recordClaudeSessionSlashCommands,
+  type ClaudeSlashCommandsByCwd,
 } from "../ClaudeProvider.ts";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
 import * as ModelManifest from "../ModelManifest.ts";
@@ -172,11 +174,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       });
 
       const scopedLimitNames = yield* makeClaudeScopedLimitNames;
-      // Latest live-session commands per cwd. Mod commands only exist in a
-      // session, so the hooks-off probe cannot return them.
-      const sessionSlashCommandsByCwd = yield* Ref.make(
-        new Map<string, ReadonlyArray<ServerProviderSlashCommand>>(),
-      );
+      const slashCommandsByCwd = yield* Ref.make<ClaudeSlashCommandsByCwd>(new Map());
       const sessionSlashCommandUpdates = yield* PubSub.unbounded<{
         readonly cwd: string;
         readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
@@ -193,14 +191,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         {
           scopedLimitNames,
           onUsageLimits: (update) => snapshot.applyUsageLimits(update),
-          onSessionCommands: ({ cwd, commands }) => {
-            const slashCommands = parseClaudeInitializationCommands(commands);
-            return Ref.update(sessionSlashCommandsByCwd, (current) =>
-              new Map(current).set(cwd, slashCommands),
+          onSessionCommands: ({ cwd, commands }) =>
+            Ref.modify(slashCommandsByCwd, (byCwd) =>
+              recordClaudeSessionSlashCommands(
+                byCwd,
+                cwd,
+                parseClaudeInitializationCommands(commands),
+              ),
             ).pipe(
-              Effect.andThen(PubSub.publish(sessionSlashCommandUpdates, { cwd, slashCommands })),
-            );
-          },
+              Effect.flatMap((slashCommands) =>
+                slashCommands === undefined
+                  ? Effect.void
+                  : PubSub.publish(sessionSlashCommandUpdates, { cwd, slashCommands }),
+              ),
+            ),
         },
       ).pipe(
         Effect.mapError(
@@ -373,25 +377,17 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
-        invalidateCaches: Cache.invalidateAll(capabilitiesProbeCache).pipe(
-          Effect.andThen(Ref.set(sessionSlashCommandsByCwd, new Map())),
-        ),
+        invalidateCaches: Cache.invalidateAll(capabilitiesProbeCache),
         sessionSlashCommands: Stream.fromPubSub(sessionSlashCommandUpdates),
         snapshotForCwd: (cwd: string) =>
           snapshot.getSnapshot.pipe(
             Effect.flatMap((machineSnapshot) =>
               probeClaudeWorkspaceSnapshot(effectiveConfig, machineSnapshot, cwd, processEnv),
             ),
-            Effect.flatMap((probed) =>
-              Ref.get(sessionSlashCommandsByCwd).pipe(
-                Effect.map((byCwd) => ({
-                  ...probed,
-                  slashCommands: mergeClaudeSessionSlashCommands(
-                    probed.slashCommands,
-                    byCwd.get(cwd) ?? [],
-                  ),
-                })),
-              ),
+            Effect.flatMap((scanned) =>
+              Ref.modify(slashCommandsByCwd, (byCwd) =>
+                recordClaudeProbedSlashCommands(byCwd, cwd, scanned.slashCommands),
+              ).pipe(Effect.map((slashCommands) => ({ ...scanned, slashCommands }))),
             ),
             Effect.provideService(FileSystem.FileSystem, fileSystem),
             Effect.provideService(Path.Path, path),
