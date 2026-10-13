@@ -13,6 +13,7 @@ import {
   ClaudeAgentSdkQueryRunner,
   layerQueryRunner,
 } from "./ClaudeAdapterV2.ts";
+import * as ClaudePluginUi from "../../provider/ClaudePluginUi.ts";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
@@ -60,6 +61,7 @@ it.effect("logs successful task stops for replay and omits failed stops", () =>
     }).pipe(
       Effect.provide(
         layerQueryRunner.pipe(
+          Layer.provide(ClaudePluginUi.layer),
           Layer.provide(
             Layer.succeed(ProviderEventLoggers, {
               native: {

@@ -1230,6 +1230,8 @@ describe("issue toolkit handlers", () => {
               resolve: () => Effect.succeed(null),
             }),
             Layer.mock(IssueProviderRegistry.IssueProviderRegistry)({
+              referenceProviders: new Set(),
+              resolveReference: () => Effect.succeed(null),
               resolveProjects: () =>
                 Effect.succeed({
                   supported: [
