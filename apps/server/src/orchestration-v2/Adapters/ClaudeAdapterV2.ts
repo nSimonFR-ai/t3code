@@ -125,6 +125,7 @@ import {
   shouldPersistProviderEvent,
 } from "../../provider/EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as ClaudePluginUi from "../../provider/ClaudePluginUi.ts";
 import {
   claudeRateLimitEventToUpdate,
   type ClaudeScopedLimitNames,
@@ -651,16 +652,27 @@ export function makeClaudeAgentSdkProtocolLogger(input: {
   };
 }
 
+/** The SDK `Query`'s control-request sender, when this SDK build has one. */
+const claudeControlRequestOf = (
+  queryRuntime: unknown,
+): ClaudePluginUi.ClaudeControlRequest | undefined => {
+  const request = (queryRuntime as { request?: unknown }).request;
+  return typeof request === "function"
+    ? (body) => (request as ClaudePluginUi.ClaudeControlRequest).call(queryRuntime, body)
+    : undefined;
+};
+
 export const layerQueryRunner: Layer.Layer<
   ClaudeAgentSdkQueryRunner,
   never,
-  Crypto.Crypto | ProviderEventLoggers.ProviderEventLoggers
+  Crypto.Crypto | ProviderEventLoggers.ProviderEventLoggers | ClaudePluginUi.ClaudePluginUi
 > = Layer.effect(
   ClaudeAgentSdkQueryRunner,
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
+    const pluginUi = yield* ClaudePluginUi.ClaudePluginUi;
 
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: crypto.randomUUIDv4.pipe(
@@ -770,6 +782,12 @@ export const layerQueryRunner: Layer.Layer<
             ),
           ),
         );
+        // Plugin UI (`ui_render`, `ui_press`) rides the SDK's control-request
+        // channel, which the SDK only exposes as an untyped method.
+        const pluginUiRequest = claudeControlRequestOf(queryRuntime);
+        if (pluginUiRequest !== undefined) {
+          yield* pluginUi.attach(input.threadId, pluginUiRequest);
+        }
 
         return {
           messages: Stream.fromAsyncIterable(claudeQueryMessages(queryRuntime), (cause) =>
@@ -782,6 +800,7 @@ export const layerQueryRunner: Layer.Layer<
                 payload: message,
               }),
             ),
+            Stream.tap((message) => pluginUi.ingest(input.threadId, message, pluginUiRequest)),
           ),
           offer: (message) =>
             Queue.offer(promptQueue, message).pipe(
@@ -858,6 +877,11 @@ export const layerQueryRunner: Layer.Layer<
           ),
           close: Queue.shutdown(promptQueue).pipe(
             Effect.andThen(closeClaudeQuery(queryRuntime)),
+            Effect.ensuring(
+              pluginUiRequest === undefined
+                ? Effect.void
+                : pluginUi.detach(input.threadId, pluginUiRequest),
+            ),
             Effect.tap(() =>
               logProtocolEvent({
                 direction: "outgoing",
