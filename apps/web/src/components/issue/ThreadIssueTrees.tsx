@@ -113,7 +113,15 @@ export function ThreadIssueTrees({
     () => trees.flatMap((tree) => tree.rows.flatMap((row) => row.issue.linkedPullRequests ?? [])),
     [trees],
   );
-  useEffect(() => onTreePullRequests?.(treePullRequests), [onTreePullRequests, treePullRequests]);
+  // Reported only when the set changes: the caller stores it in state, and `trees` is rebuilt
+  // whenever its inputs are, which would otherwise re-render the caller without end.
+  const treePullRequestsKey = treePullRequests.map((link) => link.url).join("\n");
+  const reportedTreePullRequests = useRef<string | null>(null);
+  useEffect(() => {
+    if (reportedTreePullRequests.current === treePullRequestsKey) return;
+    reportedTreePullRequests.current = treePullRequestsKey;
+    onTreePullRequests?.(treePullRequests);
+  }, [onTreePullRequests, treePullRequests, treePullRequestsKey]);
   const unread = linked.filter(
     (issue) => targetFor(issue) === null || !reads[threadIssueKey(issue)]?.detail,
   );
