@@ -830,6 +830,7 @@ function makeReplayQueryRunner(
           replayEffect(() => {
             assertNextOutboundFrame({ type: "query.stop_task", taskId });
           }),
+        supportedCommands: Effect.succeed([]),
         interrupt: replayEffect(() => {
           assertNextOutboundFrame({ type: "query.interrupt" });
         }),
