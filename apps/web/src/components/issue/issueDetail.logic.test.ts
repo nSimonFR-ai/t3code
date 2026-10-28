@@ -275,6 +275,11 @@ describe("issueDisplayLabel", () => {
     expect(issueDisplayLabel("acme/web", "123")).toBe("acme/web#123");
     expect(issueDisplayLabel("ENG", "ENG-123")).toBe("ENG-123");
   });
+
+  it("falls back when a saved tab lacks its scope or key", () => {
+    expect(issueDisplayLabel(undefined, undefined)).toBe("Issue");
+    expect(issueDisplayLabel(undefined, "ENG-123")).toBe("ENG-123");
+  });
 });
 
 describe("issueLabelOptions", () => {

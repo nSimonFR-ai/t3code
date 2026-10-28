@@ -121,3 +121,29 @@ describe("closedViewStore", () => {
     expect(saved).not.toContain("Private page");
   });
 });
+
+describe("loading saved closed views", () => {
+  it("drops issue tabs an older build saved under the same version", async () => {
+    const { name, storage, version } = useClosedViewStore.persist.getOptions();
+    const kept = { ...diff(refA), id: "kept" };
+    await storage?.setItem(name!, {
+      version: version!,
+      state: {
+        entries: [
+          kept,
+          {
+            id: "old",
+            kind: "panel-tab",
+            threadRef: refA,
+            // The #6315-era shape: no tracker, scope or key.
+            surface: { id: "issue:old", kind: "issue", provider: "github", repository: "a/b", number: 7 },
+          },
+        ],
+      },
+    });
+
+    await useClosedViewStore.persist.rehydrate();
+
+    expect(useClosedViewStore.getState().entries).toEqual([kept]);
+  });
+});

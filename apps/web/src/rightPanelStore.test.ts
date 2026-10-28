@@ -1360,3 +1360,35 @@ describe("rightPanelStore", () => {
     expect(store.getUserActionRevision(refA)).toBe(revision);
   });
 });
+
+describe("loading saved right panel state", () => {
+  it("drops issue tabs an older build saved under the same version", async () => {
+    const { name, storage, version } = useRightPanelStore.persist.getOptions();
+    const current = { id: "browser:new", kind: "preview", resourceId: null };
+    await storage?.setItem(name!, {
+      version: version!,
+      state: {
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "issue:old",
+            surfaces: [
+              current,
+              // The #6315-era shape: no tracker, scope or key.
+              { id: "issue:old", kind: "issue", provider: "github", repository: "a/b", number: 7 },
+            ],
+          },
+        },
+        threadPanelVisibilityByThreadKey: {},
+      },
+    });
+
+    await useRightPanelStore.persist.rehydrate();
+
+    const surfaces = selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      refA,
+    ).surfaces;
+    expect(surfaces.map((surface) => surface.id)).toEqual([current.id]);
+  });
+});

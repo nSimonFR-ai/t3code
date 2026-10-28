@@ -109,6 +109,11 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
   }
 };
 
+export const persistedEntries = (persisted: unknown): ClosedViewEntry[] => {
+  const entries = (persisted as Partial<Pick<ClosedViewStoreState, "entries">> | null)?.entries;
+  return Array.isArray(entries) ? entries.filter(isClosedViewEntry).filter(isPersistentView) : [];
+};
+
 export const useClosedViewStore = create<ClosedViewStoreState>()(
   persist(
     (set) => ({
@@ -139,15 +144,10 @@ export const useClosedViewStore = create<ClosedViewStoreState>()(
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
       version: 2,
-      migrate: (persisted) => {
-        const entries = (persisted as Partial<Pick<ClosedViewStoreState, "entries">> | null)
-          ?.entries;
-        return {
-          entries: Array.isArray(entries)
-            ? entries.filter(isClosedViewEntry).filter(isPersistentView)
-            : [],
-        };
-      },
+      migrate: (persisted) => ({ entries: persistedEntries(persisted) }),
+      // Validate on every load, not only on version changes: a build that reused this
+      // version could have saved views this one can't render.
+      merge: (persisted, current) => ({ ...current, entries: persistedEntries(persisted) }),
       partialize: ({ entries }) => ({ entries: entries.filter(isPersistentView) }),
     },
   ),

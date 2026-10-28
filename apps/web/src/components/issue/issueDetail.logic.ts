@@ -206,7 +206,10 @@ export function linkedPullRequestTarget(
   };
 }
 
-export function issueDisplayLabel(scope: string, key: string): string {
+// Tolerates a missing scope or key, which tabs saved by older builds can lack.
+export function issueDisplayLabel(scope: string | undefined, key: string | undefined): string {
+  if (!key) return "Issue";
+  if (!scope) return key;
   if (key.startsWith("#")) return `${scope}${key}`;
   return /^\d+$/.test(key) ? `${scope}#${key}` : key;
 }

@@ -1240,6 +1240,12 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       }),
       migrate: migratePersistedRightPanelState,
+      // Normalize on every load, not only on version changes: a build that reused this
+      // version could have saved surfaces this one can't render.
+      merge: (persisted, current) => ({
+        ...current,
+        ...migratePersistedRightPanelState(persisted),
+      }),
     },
   ),
 );
