@@ -834,6 +834,38 @@ describe("LinearIssueTracker", () => {
       ]);
     }),
   );
+  it.effect(
+    "moves an issue of another team in the bound workspace through its own team's states",
+    () =>
+      Effect.gen(function* () {
+        const test = fakeLinear({
+          T3IssueReference: () => ({ issue: issue("OPS-7") }),
+          T3TeamStates: () => ({
+            organization: { id: "org_acme", urlKey: "acme" },
+            teams: {
+              nodes: [
+                {
+                  id: "team_ops",
+                  key: "OPS",
+                  name: "Operations",
+                  states: connectionFixture([state("Shipped", "completed")]),
+                },
+              ],
+            },
+          }),
+          T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
+        });
+        const api = yield* test.tracker;
+        yield* api.setState({ ...target, scope: "acme/ENG", key: "OPS-7", state: "closed" });
+        expect(test.requests.map((request) => request.operation)).toEqual([
+          "T3IssueReference",
+          "T3TeamStates",
+          "T3IssueUpdate",
+        ]);
+        expect(test.requests[1]?.variables).toEqual({ key: "OPS" });
+        expect(test.requests[2]?.variables.input).toEqual({ stateId: "st_shipped" });
+      }),
+  );
   it.effect("clamps issue lists and marks partial preview labels", () =>
     Effect.gen(function* () {
       const test = fakeLinear({
@@ -3305,9 +3337,12 @@ it.effect.each(["comment", "update", "state", "parent", "clearParent"] as const)
     }),
 );
 
-it.effect.each(["team", "workspace"] as const)(
-  "static Linear permissions never bypass native write scope guards: %s",
-  (foreign) =>
+it.effect.each([
+  { foreign: "team", scope: "ENG" },
+  { foreign: "workspace", scope: "acme/ENG" },
+] as const)(
+  "static Linear permissions never bypass native write scope guards: $foreign",
+  ({ foreign, scope }) =>
     Effect.gen(function* () {
       const test = fakeLinear({
         T3IssueReference: () => ({
@@ -3318,7 +3353,7 @@ it.effect.each(["team", "workspace"] as const)(
         }),
       });
       const api = yield* test.tracker;
-      const input = { ...target, scope: "acme/ENG", key: "ENG-7" };
+      const input = { ...target, scope, key: "ENG-7" };
       yield* api.getViewerPermissions(input);
       expect(test.requests).toHaveLength(0);
       for (const action of [
@@ -3866,8 +3901,18 @@ it.effect.each(["ENG", "acme/ENG"])(
         }
       }
       test.requests.length = 0;
-      yield* api.setParent({ ...selected, key: "OPS-7", parentKey: "OPS-8" }).pipe(Effect.flip);
-      expect(test.requests).toHaveLength(1);
+      if (scope === "ENG") {
+        // Without a known workspace, an issue of another team stays out of reach.
+        yield* api.setParent({ ...selected, key: "OPS-7", parentKey: "OPS-8" }).pipe(Effect.flip);
+        expect(test.requests).toHaveLength(1);
+      } else {
+        // A workspace binding reaches every team of that workspace.
+        yield* api.setParent({ ...selected, key: "OPS-7", parentKey: "OPS-8" });
+        expect(test.requests.at(-1)?.variables).toEqual({
+          id: "iss_OPS-7",
+          input: { parentId: "iss_OPS-8" },
+        });
+      }
     }),
 );
 

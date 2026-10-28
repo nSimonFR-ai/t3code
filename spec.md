@@ -13,6 +13,7 @@ The fork carries Bil0000's Issues rewrite, pingdotgg/t3code#19576 (it replaced #
 - R1.1 The build MUST include #19576's Issues workspace: GitHub, GitLab, Azure DevOps, Forgejo/Gitea, GitCafe, Linear and Jira trackers, thread issue links, and the MCP issue tools.
 - R1.2 Linear MUST work as a standalone tracker, with accounts and per-project team bindings under Settings → Source control.
 - R1.3 Where upstream renamed or removed an API #19576 uses, the fork MUST adapt #19576's code to upstream's current API rather than restore the old one.
+- R1.4 A Linear binding to one team MUST still read and update issues of every other team in the same workspace (a project bound to `trusk/CO` opens `TEC-399`). Writes that depend on a team (workflow states, labels, assignees) MUST use the issue's own team, not the bound one. Another workspace stays refused. Where: `requireIssueReference` and `issueScope` in `packages/issue-tracker-linear/src/server/LinearIssueTracker.ts`. Check: the cross-team tests in `LinearIssueTracker.test.ts`.
 
 Where: merge commit on the branch, plus the follow-up port commit. Check: web, server, mobile and package typechecks are clean.
 
@@ -80,7 +81,7 @@ Where: `apps/web/src/rightPanelStore.ts`, `closedViewStore.ts` (`merge`), `compo
 ## Known gaps
 
 - Thread issue links saved in the earlier builds' format (`provider`/`repository`/`number`, without `tracker`/`scope`/`key`) make the server fail to start. The live databases were fixed by hand, but the branch has no conversion, so the pre-0.1.4 backups can't be restored as-is. SHOULD convert or drop them when projections are read.
-- A project can't link Linear issues unless some project is bound to that Linear workspace (the earlier builds' fallback for projects without a git host isn't ported).
+- A project can't link Linear issues unless some project is bound to a team of that Linear workspace (the earlier builds' fallback for projects without a git host isn't ported). Any team of a bound workspace works (R1.4).
 - Trees show only the first page of children. Trackers other than Linear show direct children only, without PRs.
 - Trees refresh with the panel's issue reads, not when an agent turn ends.
 - Issue trackers build their own host clients, so GitHub issues don't share the PR reader's rate limit.

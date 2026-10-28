@@ -403,15 +403,22 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         Effect.flatMap((parsed) =>
           reference === null
             ? Effect.fail(notFound(operation))
-            : reference.team.key.toUpperCase() !== parsed.team ||
-                (parsed.workspace !== undefined &&
-                  issueWorkspace(reference.url) !== parsed.workspace)
-              ? Effect.fail(
-                  failed(operation, "This issue belongs to another Linear team or workspace."),
+            : // Any team of the bound workspace: a project binds one team, but its threads
+              // link issues across the workspace.
+              (
+                  parsed.workspace === undefined
+                    ? reference.team.key.toUpperCase() !== parsed.team
+                    : issueWorkspace(reference.url) !== parsed.workspace
                 )
+              ? Effect.fail(failed(operation, "This issue belongs to another Linear workspace."))
               : Effect.succeed(reference),
         ),
       );
+    /** The issue's own team scope, which team-bound writes (states, labels) must use. */
+    const issueScope = (reference: LinearApi.LinearIssueReference) => {
+      const workspace = issueWorkspace(reference.url);
+      return workspace === null ? reference.team.key : `${workspace}/${reference.team.key}`;
+    };
     const resolveIssue = (operation: string, key: string, scope: string) =>
       requireIdentifier(operation, key).pipe(
         Effect.flatMap(linear.getIssueReference),
@@ -1022,7 +1029,11 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         if (input.title !== undefined) patch.title = input.title;
         if (input.body !== undefined) patch.description = input.body;
         if (input.labels !== undefined || input.assignees !== undefined) {
-          const scope = yield* requireTeam("update", input.scope, (input.labels?.length ?? 0) > 0);
+          const scope = yield* requireTeam(
+            "update",
+            issueScope(issue),
+            (input.labels?.length ?? 0) > 0,
+          );
           if (input.labels !== undefined)
             patch.labelIds = yield* labelIds("update", scope, input.labels);
           if (input.assignees !== undefined)
@@ -1033,8 +1044,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
 
       setState: Effect.fn("LinearIssueTracker.setState")(function* (input) {
         const issue = yield* resolveIssue("setState", input.key, input.scope);
-        const parsed = yield* requireScope("setState", input.scope);
-        const scope = yield* linear.getTeamStates(parsed.team);
+        const scope = yield* linear.getTeamStates(issue.team.key);
         if (scope === null) return yield* failed("setState", "This Linear team is unavailable.");
         yield* requireWorkspace("setState", input.scope, scope.organization.urlKey);
         if (scope.states.pageInfo.hasNextPage)
