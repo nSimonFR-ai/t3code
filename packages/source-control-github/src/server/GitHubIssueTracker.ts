@@ -359,7 +359,7 @@ export const make = Effect.gen(function* () {
     version: 1 as const,
     operation,
     cwd: input.cwd,
-    host: GitHubRequestPolicy.normalizeHost(input.host),
+    host: input.host.trim().toLowerCase(),
     scope: input.scope.trim().toLowerCase(),
     key: input.key,
     connectionId: input.connectionId ?? null,

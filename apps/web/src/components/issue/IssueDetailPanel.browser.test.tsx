@@ -507,7 +507,7 @@ it.each(["none", "matched", "foreign-repository", "other-environment"])(
               createdAt: "2026-10-14T00:00:00Z",
               updatedAt: "2026-10-14T00:00:00Z",
               repositoryIdentity: {
-                provider: "gitlab",
+                provider: SourceControlProviderKind.make("gitlab"),
                 canonicalKey: `gitlab.example.com/${repository}`,
                 locator: {
                   source: "git-remote",
@@ -857,7 +857,6 @@ it("closes a sub-issue draft instead of moving it to a different parent", async 
   expect(document.querySelector("#issue-create-title")).toBeNull();
   expect(state.write).not.toHaveBeenCalled();
 });
-
 
 // Stands in for the app shell's Escape observer: leaves the page unless a scope consumed the key.
 function useEscapeToGoBack() {

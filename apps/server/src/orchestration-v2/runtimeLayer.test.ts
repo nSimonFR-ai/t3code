@@ -2832,17 +2832,15 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           }),
           Layer.mock(ProjectService.ProjectService)({
             getShell: () =>
-              Effect.succeed(
-                Option.some({
-                  id: projectId,
-                  title: "Issue project",
-                  workspaceRoot: "/workspace/issues",
-                  defaultModelSelection: null,
-                  scripts: [],
-                  createdAt: detail.createdAt,
-                  updatedAt: detail.updatedAt,
-                }),
-              ),
+              Effect.succeedSome({
+                id: projectId,
+                title: "Issue project",
+                workspaceRoot: "/workspace/issues",
+                defaultModelSelection: null,
+                scripts: [],
+                createdAt: detail.createdAt,
+                updatedAt: detail.updatedAt,
+              }),
           }),
           McpToolAccessTestkit.liveThreadsLayer,
           issueCryptoLayer((size) => new Uint8Array(size).fill(++nonce)),

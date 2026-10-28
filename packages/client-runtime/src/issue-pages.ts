@@ -20,7 +20,7 @@ type IssuePageOptions<Input> = {
   ) => void;
 };
 
-interface IssueQueryAnswer<A> {
+export interface IssueQueryAnswer<A> {
   readonly value: A | null;
   readonly error: string | null;
   readonly isPending: boolean;
@@ -30,7 +30,8 @@ const EMPTY_ANSWERS = Atom.make<ReadonlyArray<IssueQueryAnswer<never>>>([]).pipe
   Atom.withLabel("web-issues:answers:empty"),
 );
 
-function createIssueQueries<Input, A>(
+/** Reads one page of each of several issue queries at once, such as a tree's levels. */
+export function createIssueQueries<Input, A>(
   label: string,
   options: IssuePageOptions<Input>,
   atomFor: (

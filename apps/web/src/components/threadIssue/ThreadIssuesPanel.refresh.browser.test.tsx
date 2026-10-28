@@ -36,6 +36,19 @@ vi.mock("~/rightPanelStore", () => ({
 vi.mock("~/localApi", () => ({ readLocalApi: () => null }));
 vi.mock("~/hooks/useCopyToClipboard", () => ({ writeTextToClipboard: vi.fn() }));
 vi.mock("./LinkThreadIssueDialog", () => ({ openLinkThreadIssueDialog: vi.fn() }));
+vi.mock("./ThreadIssueTrees", async () => {
+  const { Fragment, createElement } = await import("react");
+  return {
+    ThreadIssueTrees: ({
+      links,
+      renderLinked,
+    }: {
+      links: ReadonlyArray<{ key: string }>;
+      renderLinked: (link: unknown) => unknown;
+    }) =>
+      links.map((link) => createElement(Fragment, { key: link.key }, renderLinked(link) as never)),
+  };
+});
 vi.mock("../issue/issuePresentation", () => ({
   issueTrackerPresentation: () => ({ providerName: "GitHub", Icon: () => null }),
   IssueStateGlyph: () => null,

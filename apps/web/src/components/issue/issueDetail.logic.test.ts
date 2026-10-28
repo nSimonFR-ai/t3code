@@ -2,11 +2,15 @@ import type {
   IssueDetail,
   IssueLinkedPullRequest,
   IssueRef,
-  SourceControlProviderKind,
   IssueReaction,
   IssueReactionContent,
 } from "@t3tools/contracts";
-import { EnvironmentId, IssueTrackerKind, ProjectId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  IssueTrackerKind,
+  ProjectId,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -135,7 +139,7 @@ describe("linkedPullRequestTarget", () => {
     createdAt: "2026-10-14T00:00:00Z",
     updatedAt: "2026-10-14T00:00:00Z",
     repositoryIdentity: {
-      provider: "github",
+      provider: SourceControlProviderKind.make("github"),
       canonicalKey: "github.com/acme/web",
       locator: {
         source: "git-remote",
@@ -178,7 +182,7 @@ describe("linkedPullRequestTarget", () => {
       ...checkout,
       repositoryIdentity: {
         ...checkout.repositoryIdentity!,
-        provider: "gitlab",
+        provider: SourceControlProviderKind.make("gitlab"),
         canonicalKey: "gitlab.example.com/acme/web",
         locator: {
           source: "git-remote" as const,
@@ -229,12 +233,13 @@ describe("linkedPullRequestTarget", () => {
       ...checkout,
       environmentId: kind === "other-environment" ? EnvironmentId.make("elsewhere") : environmentId,
       repositoryIdentity: {
-        provider:
+        provider: SourceControlProviderKind.make(
           kind === "other-provider"
             ? "github"
             : kind === "unsupported-provider"
               ? "unsupported"
               : "gitlab",
+        ),
         canonicalKey: `${host}/${repository}`,
         locator: {
           source: "git-remote",

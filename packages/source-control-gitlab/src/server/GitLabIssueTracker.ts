@@ -1418,7 +1418,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
 
       getViewer: (input) => viewer({ cwd: input.cwd, host: input.host, operation: "getViewer" }),
 
-      listIssues: (input) => {
+      listIssues: Effect.fn("listIssues")(function (input) {
         if (groupPath(input.scope) !== null)
           return Effect.fail(
             refused("listIssues", "Group epics cannot be listed as project issues."),
@@ -1466,7 +1466,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
             nextCursor: list.rawCount < perPage ? null : String(page + 1),
           })),
         );
-      },
+      }),
 
       getIssue: (input) => {
         if (groupPath(input.scope) !== null) return epicDetail(input);

@@ -11,6 +11,7 @@ import {
   type IssueListResult,
   type OrchestrationProjectShell,
   type ThreadIssueLink,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -116,7 +117,7 @@ const project: OrchestrationProjectShell = {
       remoteName: "origin",
       remoteUrl: "git@github.com:T3Tools/T3Code.git",
     },
-    provider: "github",
+    provider: SourceControlProviderKind.make("github"),
     displayName: "T3Tools/T3Code",
     owner: "T3Tools",
     name: "T3Code",
@@ -677,11 +678,11 @@ describe("issue toolkit handlers", () => {
     const input = { host: "github.com" };
     const wire = encodeIssueTools.list_issues!(input);
     expect(wire).toEqual({ state: { host: "github.com" } });
-    expect(
-      Schema.decodeUnknownSync(IssuesToolkit.tools.list_issues.parametersSchema)(wire),
-    ).toEqual(input);
+    expect(Schema.decodeSync(IssuesToolkit.tools.list_issues.parametersSchema)(wire)).toEqual(
+      input,
+    );
     expect(() =>
-      Schema.decodeUnknownSync(IssuesToolkit.tools.list_issues.parametersSchema)(input),
+      Schema.decodeSync(IssuesToolkit.tools.list_issues.parametersSchema)(input),
     ).toThrow();
   });
 
@@ -1248,16 +1249,14 @@ describe("issue toolkit handlers", () => {
           IssueTrackerHost.IssueTrackerHost.of({
             credentials: {
               get: () =>
-                Effect.succeed(
-                  Option.some(
-                    linear
-                      ? "fake-linear-token"
-                      : JSON.stringify({
-                          site: source.host,
-                          email: "fake@example.test",
-                          token: "fake-jira-token",
-                        }),
-                  ),
+                Effect.succeedSome(
+                  linear
+                    ? "fake-linear-token"
+                    : JSON.stringify({
+                        site: source.host,
+                        email: "fake@example.test",
+                        token: "fake-jira-token",
+                      }),
                 ),
             },
           }),
@@ -1293,7 +1292,7 @@ describe("issue toolkit handlers", () => {
             }),
         }),
         Layer.mock(ProjectService.ProjectService)({
-          getShell: () => Effect.succeed(Option.some(project)),
+          getShell: () => Effect.succeedSome(project),
         }),
         Layer.mock(IssueService.IssueService)({
           resolveSource: targetService.resolveSource,
@@ -2503,8 +2502,8 @@ it.each([
   for (const selection of [{}, { connectionId: "ExactB" }]) {
     const selected = { projectId: PROJECT_ID, ...input, ...selection };
     const encoded = Schema.encodeUnknownSync(codec)(selected);
-    expect(Schema.decodeUnknownSync(codec)(encoded)).toEqual(selected);
-    expect(() => Schema.decodeUnknownSync(codec)(selected)).toThrow();
+    expect(Schema.decodeSync(codec)(encoded)).toEqual(selected);
+    expect(() => Schema.decodeSync(codec)(selected)).toThrow();
     expect(() => decodeLegacyIssueWrite(encoded)).toThrow();
   }
 });

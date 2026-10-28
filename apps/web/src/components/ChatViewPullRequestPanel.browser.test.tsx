@@ -80,7 +80,6 @@ const surfaceProps = {
   onCloseSurface: vi.fn(),
   terminal: {
     launchContext: null,
-    focusRequestId: 0,
     keybindings: [],
     onAddTerminalContext: vi.fn(),
     onSplitTerminal: vi.fn(),

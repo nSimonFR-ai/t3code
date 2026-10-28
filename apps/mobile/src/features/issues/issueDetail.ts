@@ -1,7 +1,6 @@
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { EnvironmentId } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import type {
   ExecutionEnvironmentCapabilities,
   IssueActor,
@@ -141,8 +140,9 @@ export function linkedPullRequestContext(
   projects: ReadonlyArray<EnvironmentProject>,
   capabilities: ExecutionEnvironmentCapabilities | undefined,
 ) {
-  const link = parseChangeRequestUrl(url);
-  const provider = sourceControlClients.findByChangeRequestUrl(url);
+  const parsed = sourceControlClients.parseChangeRequestUrl(url);
+  const link = parsed?.link ?? null;
+  const provider = parsed?.definition;
   if (link === null || provider === undefined || capabilities?.pullRequests !== true) return null;
   const local = projects.filter((project) => project.environmentId === environmentId);
   const serves = (

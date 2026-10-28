@@ -1,10 +1,6 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import {
-  EnvironmentId,
-  ProjectId,
-  pullRequestHostOf,
-  SourceControlProviderKind,
-} from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, SourceControlProviderKind } from "@t3tools/contracts";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import { use, useCallback } from "react";
 import { useOpenIssue } from "../features/issues/useOpenIssue";
@@ -41,9 +37,9 @@ export function useOpenIssueLink(options?: {
             if (project.environmentId !== target || tracker === undefined || tracker === "unknown")
               return false;
             const kind = SourceControlProviderKind.make(tracker);
-            let host = pullRequestHostOf(identity, kind);
+            let host = sourceControlClients.changeRequestHost(identity, kind);
             if (tracker === "forgejo" && identity?.webUrl !== undefined) {
-              host = pullRequestHostOf(
+              host = sourceControlClients.changeRequestHost(
                 { canonicalKey: host, locator: { remoteUrl: identity.webUrl } },
                 kind,
               );

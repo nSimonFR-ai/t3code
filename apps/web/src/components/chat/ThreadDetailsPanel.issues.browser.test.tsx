@@ -125,7 +125,6 @@ const threadRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId
 const props: ThreadDetailsPanelProps = {
   anchor: { current: null },
   handle: PopoverCreateHandle(),
-  onPresentationChange: vi.fn(),
   environmentId: threadRef.environmentId,
   threadId: threadRef.threadId,
   projectId: ProjectId.make("project"),

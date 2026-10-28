@@ -1,5 +1,5 @@
 import { createIssueEnvironmentAtoms } from "@t3tools/client-runtime/state/issues";
-import { createIssuePagedQuery } from "@t3tools/client-runtime/issue-pages";
+import { createIssuePagedQuery, createIssueQueries } from "@t3tools/client-runtime/issue-pages";
 import { issueScopeKeyOf } from "@t3tools/contracts";
 import type {
   EnvironmentId,
@@ -92,6 +92,17 @@ export const useIssueHierarchy = createIssuePagedQuery(
   issueEnvironment.hierarchy,
   (value) => value.children,
   (first) => first?.parent ?? null,
+);
+/** First hierarchy pages of several issues at once, for a thread's issue trees. */
+export const useIssueHierarchyReads = createIssueQueries(
+  "web-issues:hierarchy-reads",
+  pageOptions,
+  issueEnvironment.hierarchy,
+);
+export const useIssueLinkedPullRequestReads = createIssueQueries(
+  "web-issues:linked-pull-request-reads",
+  pageOptions,
+  issueEnvironment.linkedPullRequests,
 );
 export const useIssueLabelCandidates = createIssuePagedQuery(
   pageOptions,

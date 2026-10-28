@@ -105,12 +105,13 @@ const make = Effect.gen(function* () {
       }),
       Effect.mapError(toSqlOrDecodeError("listIssueTrackerBindings", "IssueTrackerBinding")),
     ),
-    set: (input) =>
-      (input.binding === null
-        ? input.tracker === undefined
-          ? sql`DELETE FROM issue_tracker_bindings WHERE project_id = ${input.projectId}`
-          : sql`DELETE FROM issue_tracker_bindings WHERE project_id = ${input.projectId} AND native_tracker = ${input.tracker}`
-        : sql`
+    set: Effect.fn("IssueTrackerBindingsRepository.set")(function (input) {
+      return (
+        input.binding === null
+          ? input.tracker === undefined
+            ? sql`DELETE FROM issue_tracker_bindings WHERE project_id = ${input.projectId}`
+            : sql`DELETE FROM issue_tracker_bindings WHERE project_id = ${input.projectId} AND native_tracker = ${input.tracker}`
+          : sql`
             INSERT INTO issue_tracker_bindings (project_id, tracker, native_tracker, scope, host, connection_id, updated_at)
             VALUES (${input.projectId}, ${input.binding.connectionId === undefined ? input.binding.tracker : JSON.stringify({ tracker: input.binding.tracker, connectionId: input.binding.connectionId })}, ${input.binding.tracker}, ${input.binding.scope}, ${input.binding.host ?? null}, ${input.binding.connectionId ?? null}, ${input.updatedAt})
             ON CONFLICT (project_id, native_tracker)
@@ -121,14 +122,18 @@ const make = Effect.gen(function* () {
         Effect.mapError(
           (cause) => new PersistenceSqlError({ operation: "setIssueTrackerBinding", cause }),
         ),
-      ),
-    removeTracker: (tracker, connectionId) =>
-      sql`DELETE FROM issue_tracker_bindings WHERE native_tracker = ${tracker} AND connection_id IS ${connectionId ?? null}`.pipe(
-        Effect.asVoid,
-        Effect.mapError(
-          (cause) => new PersistenceSqlError({ operation: "removeIssueTrackerBindings", cause }),
-        ),
-      ),
+      );
+    }),
+    removeTracker: Effect.fn("IssueTrackerBindingsRepository.removeTracker")(
+      function (tracker, connectionId) {
+        return sql`DELETE FROM issue_tracker_bindings WHERE native_tracker = ${tracker} AND connection_id IS ${connectionId ?? null}`.pipe(
+          Effect.asVoid,
+          Effect.mapError(
+            (cause) => new PersistenceSqlError({ operation: "removeIssueTrackerBindings", cause }),
+          ),
+        );
+      },
+    ),
   });
 });
 

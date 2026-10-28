@@ -92,10 +92,10 @@ const make = Effect.gen(function* () {
     const scope = yield* McpInvocationContext.requireMcpCapability("issues");
     const threadId = requested ?? scope.thread?.threadId;
     if (threadId === undefined) return yield* new IssueThreadRequiredError();
-    const thread = yield* engine
-      .getThreadShell(threadId)
-      .pipe(Effect.map(Option.fromNullishOr))
-      .pipe(Effect.mapError((cause) => new IssueService.IssueLinkFailedError({ cause })));
+    const thread = yield* engine.getThreadShell(threadId).pipe(
+      Effect.map(Option.fromNullishOr),
+      Effect.mapError((cause) => new IssueService.IssueLinkFailedError({ cause })),
+    );
     if (Option.isNone(thread) || thread.value.deletedAt !== null) {
       return yield* new ThreadIssueService.IssueThreadNotFoundError({ threadId });
     }

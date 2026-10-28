@@ -9,6 +9,7 @@ import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/h
 import * as GitHubRest from "./GitHubRest.ts";
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
 import * as GitHubIssueTracker from "./GitHubIssueTracker.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
@@ -26,6 +27,12 @@ function readGraphQlRequest(request: HttpClientRequest.HttpClientRequest) {
     request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
   );
 }
+
+const appSignedOut = Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({
+  enabled: false,
+  token: () => Effect.succeedNone,
+  invalidate: () => Effect.void,
+});
 
 const NOW = Date.parse("2026-10-05T12:00:00.000Z");
 
@@ -47,6 +54,8 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
             fingerprint: `${host}:${tokens[0]}`,
           };
         }),
+      saved: () => Effect.succeedNone,
+      fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
       invalidate: () =>
         Effect.sync(() => {
           invalidations++;
@@ -62,7 +71,7 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
     }),
   );
   const layer = GitHubRest.layer.pipe(
-    Layer.provideMerge(Layer.mergeAll(credentials, http)),
+    Layer.provideMerge(Layer.mergeAll(credentials, http, appSignedOut)),
     Layer.provideMerge(GitHubQuota.layer),
     Layer.provideMerge(SourceControlRateLimit.layer),
   );

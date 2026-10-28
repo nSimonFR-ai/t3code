@@ -906,9 +906,19 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         const selected = yield* requireIssueReference("getHierarchy", input.scope, result.issue);
         const nextCursor = yield* pageCursor("getHierarchy", input, selected.children);
         return {
-          parent: selected.parent === null ? null : relation(selected.parent, input.scope),
+          parent:
+            selected.parent === null
+              ? null
+              : {
+                  ...relation(selected.parent, input.scope),
+                  linkedPullRequests: toLinkedPullRequests(selected.parent.attachments.nodes),
+                },
           children: {
-            items: selected.children.nodes.map((value) => relation(value, input.scope)),
+            items: selected.children.nodes.map((value) => ({
+              ...relation(value, input.scope),
+              linkedPullRequests: toLinkedPullRequests(value.attachments.nodes),
+              children: value.children.nodes.map((child) => relation(child, input.scope)),
+            })),
             nextCursor,
           },
         };

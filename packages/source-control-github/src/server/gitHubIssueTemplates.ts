@@ -73,7 +73,7 @@ function readYaml<S extends Schema.Top & { readonly DecodingServices: never }>(
   text: string,
   schema: S,
 ) {
-  return Option.getOrUndefined(Schema.decodeUnknownOption(fromYaml(schema))(text));
+  return Option.getOrUndefined(Schema.decodeOption(fromYaml(schema))(text));
 }
 const names = (value: string | ReadonlyArray<string> | undefined) =>
   typeof value === "string"

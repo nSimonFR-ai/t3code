@@ -214,7 +214,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       order: IssueListOrder,
       limit?: number,
     ): Effect.Effect<typeof ForgejoConversationCursor.Type | undefined, IssueTrackerError> => {
-      if (cursor === undefined) return Effect.succeed(undefined);
+      if (cursor === undefined) return Effect.undefined;
       const decoded =
         cursor.length <= 8192 ? decodeJsonResult(ForgejoConversationCursor)(cursor) : undefined;
       if (
@@ -942,7 +942,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
 
       getViewer: (input) => getViewer({ ...input, scope: "" }, "getViewer"),
 
-      listIssues: (input) => {
+      listIssues: Effect.fn("listIssues")(function (input) {
         if (
           (input.sort !== undefined && input.sort !== "created") ||
           (input.order !== undefined && input.order !== "desc")
@@ -991,7 +991,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
             nextCursor,
           })),
         );
-      },
+      }),
 
       getIssue: (input) =>
         issueTarget("getIssue", input).pipe(

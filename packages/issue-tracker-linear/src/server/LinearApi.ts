@@ -83,7 +83,7 @@ export type LinearAttachment = Generated.Attachment;
 export type LinearHistoryEntry = Generated.IssueHistory;
 type LinearIssueDetail = Generated.T3Issue.Result["issue"];
 export type LinearIssueReference = Generated.T3IssueReference.Result["issue"];
-export type LinearRelation = Generated.ParentIssue;
+export type LinearRelation = Generated.LinearHierarchyRelative;
 const LinearTemplateData = Schema.Struct({
   title: Schema.optional(Schema.NullOr(Schema.String)),
   description: Schema.optional(Schema.Unknown),

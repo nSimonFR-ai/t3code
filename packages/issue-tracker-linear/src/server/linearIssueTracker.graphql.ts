@@ -3,6 +3,47 @@ import { GraphQL, GraphQLGroup } from "effect/graphql"
 import * as Schema from "effect/Schema"
 import * as Shared from "../../schema/linear.graphql.ts"
 
+/** A state in a team's workflow, representing an issue status such as Triage, Backlog, Todo, In Progress, In Review, Done, or Canceled. Each team has its own set of workflow states that define the progression of issues through the team's process. Workflow states have a type that categorizes them (triage, backlog, unstarted, started, completed, canceled), a position that determines their display order, and a color for visual identification. States can be inherited from parent teams to sub-teams. */
+export const WorkflowState = Schema.Struct({
+  /** The unique identifier of the entity. */
+  id: Shared.ID,
+  /** The state's human-readable name (e.g., 'In Progress', 'Done', 'Backlog'). */
+  name: Schema.String,
+  /** The type of the state. One of "triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate". */
+  type: Schema.String,
+  /** The position of the state in the team's workflow. States are displayed in ascending order of position within their type group. */
+  position: Shared.Float
+})
+export interface WorkflowState extends Schema.Struct.Type<typeof WorkflowState.fields> {}
+
+/** A team is the primary organizational unit in Linear. Issues belong to teams, and each team has its own workflow states, cycles, labels, and settings. Teams can be public (visible to all workspace members), private (visible only to team members), or restricted (visible only within an enclosing private-team boundary). Teams can also have sub-teams that inherit settings from their parent. */
+export const T3IssueReferenceIssueTeamTeam = Schema.Struct({
+  /** The team's unique key, used as a prefix in issue identifiers (e.g., 'ENG' in 'ENG-123') and in URLs. */
+  key: Schema.String
+})
+export interface T3IssueReferenceIssueTeamTeam extends Schema.Struct.Type<typeof T3IssueReferenceIssueTeamTeam.fields> {}
+
+/**
+ * `fragment LinearHierarchyRelative on Issue`
+ *
+ * An issue is the core work item in Linear. Issues belong to a team, have a workflow status, can be assigned to users, carry a priority level, and can be organized into projects and cycles. Issues support sub-issues (parent-child hierarchy up to 10 levels deep), labels, due dates, estimates, and SLA tracking. They can also be linked to other issues via relations, attached to releases, and tracked through their full history of changes.
+ */
+export const LinearHierarchyRelative = Schema.Struct({
+  /** The unique identifier of the entity. */
+  id: Shared.ID,
+  /** Issue's human readable identifier (e.g. ENG-123). */
+  identifier: Schema.String,
+  /** Issue URL. */
+  url: Schema.String,
+  /** The team that the issue belongs to. Every issue must belong to exactly one team, which determines the available workflow states, labels, and other team-specific configuration. */
+  team: T3IssueReferenceIssueTeamTeam,
+  /** The issue's title. This is the primary human-readable summary of the work item. */
+  title: Schema.String,
+  /** The workflow state (issue status) that the issue is currently in. Workflow states represent the issue's progress through the team's workflow, such as Triage, Todo, In Progress, Done, or Canceled. */
+  state: WorkflowState
+})
+export interface LinearHierarchyRelative extends Schema.Struct.Type<typeof LinearHierarchyRelative.fields> {}
+
 /** A user that belongs to a workspace. Users can have different roles (admin, member, guest, or app) that determine their level of access. Users can be members of multiple teams, and can be active or deactivated. Guest users have limited access scoped to specific teams they are invited to. */
 export const ViewerUser = Schema.Struct({
   /** The unique identifier of the entity. */
@@ -18,32 +59,12 @@ export const ViewerUser = Schema.Struct({
 })
 export interface ViewerUser extends Schema.Struct.Type<typeof ViewerUser.fields> {}
 
-/** A state in a team's workflow, representing an issue status such as Triage, Backlog, Todo, In Progress, In Review, Done, or Canceled. Each team has its own set of workflow states that define the progression of issues through the team's process. Workflow states have a type that categorizes them (triage, backlog, unstarted, started, completed, canceled), a position that determines their display order, and a color for visual identification. States can be inherited from parent teams to sub-teams. */
-export const WorkflowState = Schema.Struct({
-  /** The unique identifier of the entity. */
-  id: Shared.ID,
-  /** The state's human-readable name (e.g., 'In Progress', 'Done', 'Backlog'). */
-  name: Schema.String,
-  /** The type of the state. One of "triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate". */
-  type: Schema.String,
-  /** The position of the state in the team's workflow. States are displayed in ascending order of position within their type group. */
-  position: Shared.Float
-})
-export interface WorkflowState extends Schema.Struct.Type<typeof WorkflowState.fields> {}
-
 /** A milestone within a project. Milestones break a project into phases or target checkpoints, each with its own target date and set of issues. Issues can be assigned to a milestone to track progress toward that checkpoint. */
 export const ProjectMilestone = Schema.Struct({
   /** The name of the project milestone. */
   name: Schema.String
 })
 export interface ProjectMilestone extends Schema.Struct.Type<typeof ProjectMilestone.fields> {}
-
-/** A team is the primary organizational unit in Linear. Issues belong to teams, and each team has its own workflow states, cycles, labels, and settings. Teams can be public (visible to all workspace members), private (visible only to team members), or restricted (visible only within an enclosing private-team boundary). Teams can also have sub-teams that inherit settings from their parent. */
-export const T3IssueReferenceIssueTeamTeam = Schema.Struct({
-  /** The team's unique key, used as a prefix in issue identifiers (e.g., 'ENG' in 'ENG-123') and in URLs. */
-  key: Schema.String
-})
-export interface T3IssueReferenceIssueTeamTeam extends Schema.Struct.Type<typeof T3IssueReferenceIssueTeamTeam.fields> {}
 
 /**
  * `fragment LinearIssueRow on Issue`
@@ -307,11 +328,11 @@ export const Attachment = Schema.Struct({
 })
 export interface Attachment extends Schema.Struct.Type<typeof Attachment.fields> {}
 
-export const AttachmentConnection = Schema.Struct({
+export const IssueAttachmentsAttachmentConnection = Schema.Struct({
   nodes: Schema.Array(Attachment),
   pageInfo: TeamsPageInfoPageInfo
 })
-export interface AttachmentConnection extends Schema.Struct.Type<typeof AttachmentConnection.fields> {}
+export interface IssueAttachmentsAttachmentConnection extends Schema.Struct.Type<typeof IssueAttachmentsAttachmentConnection.fields> {}
 
 /** A record of changes to an issue. Each history entry captures one or more property changes made to an issue within a short grouping window by the same actor. History entries track changes to fields such as title, assignee, status, priority, project, cycle, labels, due date, estimate, parent issue, and more. They also record metadata about what triggered the change (e.g., a user action, workflow automation, triage rule, or integration). */
 export const IssueHistory = Schema.Struct({
@@ -388,7 +409,7 @@ export const T3IssueIssueIssue = Schema.Struct({
   /** Reactions associated with the issue. */
   reactions: Schema.Array(Reaction),
   /** Attachments associated with the issue. */
-  attachments: AttachmentConnection,
+  attachments: IssueAttachmentsAttachmentConnection,
   /** History entries associated with the issue. */
   history: T3IssueIssueHistoryIssueHistoryConnection
 })
@@ -1033,28 +1054,39 @@ export declare namespace T3CommentReactions {
   export type Result = typeof T3CommentReactions.result.Type
 }
 
+export const ParentAttachmentsAttachmentConnection = Schema.Struct({
+  nodes: Schema.Array(Attachment)
+})
+export interface ParentAttachmentsAttachmentConnection extends Schema.Struct.Type<typeof ParentAttachmentsAttachmentConnection.fields> {}
+
 /** An issue is the core work item in Linear. Issues belong to a team, have a workflow status, can be assigned to users, carry a priority level, and can be organized into projects and cycles. Issues support sub-issues (parent-child hierarchy up to 10 levels deep), labels, due dates, estimates, and SLA tracking. They can also be linked to other issues via relations, attached to releases, and tracked through their full history of changes. */
 export const ParentIssue = Schema.Struct({
-  /** The unique identifier of the entity. */
-  id: Shared.ID,
-  /** Issue's human readable identifier (e.g. ENG-123). */
-  identifier: Schema.String,
-  /** Issue URL. */
-  url: Schema.String,
-  /** The team that the issue belongs to. Every issue must belong to exactly one team, which determines the available workflow states, labels, and other team-specific configuration. */
-  team: T3IssueReferenceIssueTeamTeam,
-  /** The issue's title. This is the primary human-readable summary of the work item. */
-  title: Schema.String,
-  /** The workflow state (issue status) that the issue is currently in. Workflow states represent the issue's progress through the team's workflow, such as Triage, Todo, In Progress, Done, or Canceled. */
-  state: WorkflowState
+  ...LinearHierarchyRelative.fields,
+  /** Attachments associated with the issue. */
+  attachments: ParentAttachmentsAttachmentConnection
 })
 export interface ParentIssue extends Schema.Struct.Type<typeof ParentIssue.fields> {}
 
-export const IssueConnection = Schema.Struct({
-  nodes: Schema.Array(ParentIssue),
+export const NodesChildrenIssueConnection = Schema.Struct({
+  nodes: Schema.Array(LinearHierarchyRelative)
+})
+export interface NodesChildrenIssueConnection extends Schema.Struct.Type<typeof NodesChildrenIssueConnection.fields> {}
+
+/** An issue is the core work item in Linear. Issues belong to a team, have a workflow status, can be assigned to users, carry a priority level, and can be organized into projects and cycles. Issues support sub-issues (parent-child hierarchy up to 10 levels deep), labels, due dates, estimates, and SLA tracking. They can also be linked to other issues via relations, attached to releases, and tracked through their full history of changes. */
+export const NodesIssue = Schema.Struct({
+  ...LinearHierarchyRelative.fields,
+  /** Attachments associated with the issue. */
+  attachments: ParentAttachmentsAttachmentConnection,
+  /** Children of the issue. */
+  children: NodesChildrenIssueConnection
+})
+export interface NodesIssue extends Schema.Struct.Type<typeof NodesIssue.fields> {}
+
+export const IssueChildrenIssueConnection = Schema.Struct({
+  nodes: Schema.Array(NodesIssue),
   pageInfo: TeamsPageInfoPageInfo
 })
-export interface IssueConnection extends Schema.Struct.Type<typeof IssueConnection.fields> {}
+export interface IssueChildrenIssueConnection extends Schema.Struct.Type<typeof IssueChildrenIssueConnection.fields> {}
 
 /** An issue is the core work item in Linear. Issues belong to a team, have a workflow status, can be assigned to users, carry a priority level, and can be organized into projects and cycles. Issues support sub-issues (parent-child hierarchy up to 10 levels deep), labels, due dates, estimates, and SLA tracking. They can also be linked to other issues via relations, attached to releases, and tracked through their full history of changes. */
 export const T3HierarchyIssueIssue = Schema.Struct({
@@ -1069,7 +1101,7 @@ export const T3HierarchyIssueIssue = Schema.Struct({
   /** The parent of the issue. */
   parent: Schema.NullOr(ParentIssue),
   /** Children of the issue. */
-  children: IssueConnection
+  children: IssueChildrenIssueConnection
 })
 export interface T3HierarchyIssueIssue extends Schema.Struct.Type<typeof T3HierarchyIssueIssue.fields> {}
 
@@ -1082,9 +1114,11 @@ export const T3Hierarchy = GraphQL.query("T3Hierarchy", {
       { name: "after", body: "String" }
     ],
     selections: [
-      { name: "issue", body: ["(id:$", "id", "){id identifier url team{key}parent{id identifier url team{key}title state{id name type position}}children(first:$", "first", " after:$", "after", "){nodes{id identifier url team{key}title state{id name type position}}pageInfo{hasNextPage endCursor}}}"] }
+      { name: "issue", body: ["(id:$", "id", "){id identifier url team{key}parent{...LinearHierarchyRelative attachments(first:5){nodes{url title sourceType metadata}}}children(first:$", "first", " after:$", "after", "){nodes{...LinearHierarchyRelative attachments(first:5){nodes{url title sourceType metadata}}children(first:20){nodes{...LinearHierarchyRelative}}}pageInfo{hasNextPage endCursor}}}"] }
     ],
-    fragments: []
+    fragments: [
+      { name: "LinearHierarchyRelative", body: ["on Issue{id identifier url team{key}title state{id name type position}}"] }
+    ]
   },
   variables: {
     id: Schema.String,
@@ -1167,7 +1201,7 @@ export const T3AttachmentsIssueIssue = Schema.Struct({
   /** The team that the issue belongs to. Every issue must belong to exactly one team, which determines the available workflow states, labels, and other team-specific configuration. */
   team: T3IssueReferenceIssueTeamTeam,
   /** Attachments associated with the issue. */
-  attachments: AttachmentConnection
+  attachments: IssueAttachmentsAttachmentConnection
 })
 export interface T3AttachmentsIssueIssue extends Schema.Struct.Type<typeof T3AttachmentsIssueIssue.fields> {}
 

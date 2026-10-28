@@ -7,6 +7,7 @@ import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSour
 import {
   IssueTrackerKind,
   ProjectId,
+  SourceControlProviderKind,
   issueListCursorKey,
   type OrchestrationProjectShell,
   type Project,
@@ -90,7 +91,7 @@ const azureFixture = (sources: ReadonlyArray<{ id: string; host: string; reposit
       ...shell(source.id),
       repositoryIdentity: {
         canonicalKey: source.host + "/" + source.repository,
-        provider: "azure-devops" as const,
+        provider: SourceControlProviderKind.make("azure-devops"),
         displayName: source.repository,
         locator: {
           source: "git-remote" as const,
@@ -476,8 +477,9 @@ it.effect(
       const stored = new Map(f.stored);
       f.requests.length = 0;
       f.credentialWrites.length = 0;
-      const repeated = yield* Effect.all(
-        ["token-A", "token-A-rotated"].map((token) => f.add(token).pipe(Effect.result)),
+      const repeated = yield* Effect.forEach(
+        ["token-A", "token-A-rotated"],
+        (token) => f.add(token).pipe(Effect.result),
         { concurrency: 2 },
       );
       for (const result of repeated) {
@@ -874,8 +876,9 @@ it.effect(
       );
       const api = yield* JiraApi.make.pipe(Effect.provide(dependencies));
       for (const method of ["GET", "PUT"] as const) {
-        yield* Effect.all(
-          [undefined, "Account", "account"].map((connectionId) =>
+        yield* Effect.forEach(
+          [undefined, "Account", "account"],
+          (connectionId) =>
             api
               .request({
                 host: "same.atlassian.net",
@@ -885,7 +888,6 @@ it.effect(
                 schema: Schema.Struct({ key: Schema.String }),
               })
               .pipe(Effect.provideService(IssueTrackerHost.ConnectionId, connectionId)),
-          ),
           { concurrency: 3 },
         );
       }

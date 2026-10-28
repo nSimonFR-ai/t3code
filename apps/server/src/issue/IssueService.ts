@@ -26,8 +26,6 @@ import {
   IssueOperationError,
   IssueTrackerKind,
   IssueUnavailableError,
-  pullRequestHostOf,
-  SourceControlProviderKind,
   type IssueCandidates,
   type IssueDependenciesInput,
   type IssueDependenciesPage,
@@ -67,7 +65,7 @@ import {
   type OrchestrationProjectShell,
   ProjectId,
 } from "@t3tools/contracts";
-import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
+import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import { azureDevOpsIssueScope, parseIssueUrl } from "@t3tools/shared/issueUrl";
 import { parseForgejoRemote } from "@t3tools/source-control-forgejo/server/ForgejoCli";
 import {
@@ -231,7 +229,7 @@ export function resolveGitHostBinding(
         scope: issueScopeKeyOf({ tracker: kind, scope: remote.path }),
       };
   }
-  let host = pullRequestHostOf(identity, SourceControlProviderKind.make(kind));
+  let host = sourceControlDefinitions.changeRequestHost(identity, kind);
   if (kind === "gitlab") {
     const remote = URL.parse(identity.locator.remoteUrl);
     if (remote?.protocol === "http:" || remote?.protocol === "https:")
@@ -240,7 +238,7 @@ export function resolveGitHostBinding(
   const scope =
     kind === "azure-devops"
       ? azureDevOpsProjectScope(host, identity.displayName)
-      : sourceControlRepositorySelector(identity);
+      : sourceControlDefinitions.repositorySelector(identity);
   if (scope === null) return null;
   return {
     tracker: IssueTrackerKind.make(kind),
@@ -529,8 +527,9 @@ export const make = Effect.gen(function* () {
       ref,
       refreshRepository && api !== null && !isStandaloneIssueTracker(api),
     ).pipe(
-      Effect.flatMap((project) =>
-        project.writable ? Effect.succeed(project) : Effect.fail(readOnly(operation)),
+      Effect.filterOrFail(
+        (project) => project.writable,
+        () => readOnly(operation),
       ),
     );
   };

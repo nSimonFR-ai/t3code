@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, IssueTrackerKind, ProjectId, ThreadId } from "@t3tools/contracts";
+import { changeRequestReferenceAutolinker } from "@t3tools/client-runtime/pull-request-markdown";
 
 const state = vi.hoisted(() => ({
   read: vi.fn(),
@@ -110,7 +111,7 @@ vi.mock("../state/pullRequests", async (importOriginal) => {
     ...original,
     pullRequestEnvironment: {
       ...original.pullRequestEnvironment,
-      detail: (target: unknown) => {
+      previewCard: (target: unknown) => {
         state.read(target);
         return null;
       },
@@ -208,7 +209,13 @@ async function show(surface: string, text = `[PR 42](${url})`, standaloneIssue =
         />
       ) : (
         <PullRequestMarkdownContext
-          value={{ repositoryUrl: "https://github.com/acme/repo", threadRef: owner }}
+          value={{
+            autolinks: changeRequestReferenceAutolinker({
+              provider: "github",
+              url: "https://github.com/acme/repo/pull/1",
+            }),
+            threadRef: owner,
+          }}
         >
           <PullRequestCommentBody
             text={text}
@@ -252,33 +259,27 @@ it.each(["body", "comment", "editor-preview", "same-environment", "standalone", 
   },
 );
 
-it.each([true, false])(
-  "reads hover preview only from its supported source (supported=%s)",
-  async (supported) => {
-    vi.useFakeTimers();
-    state.configs.get("env-b")!.environment.capabilities.pullRequests = supported;
-    await show("body");
-    expect(state.read).not.toHaveBeenCalled();
-    const link = container.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!;
-    await act(async () => {
-      link.dispatchEvent(new MouseEvent("mouseenter"));
-      await vi.advanceTimersByTimeAsync(400);
-    });
-    if (supported)
-      expect(state.read).toHaveBeenCalledExactlyOnceWith({
-        environmentId: "env-b",
-        input: {
-          projectId: "project-env-b",
-          host: "github.com",
-          repository: "acme/repo",
-          number: 42,
-        },
-      });
-    else expect(state.read).not.toHaveBeenCalled();
-    expect(surfaces()).toEqual([]);
-    expect(state.command).not.toHaveBeenCalled();
-  },
-);
+it("reads hover preview from its source", async () => {
+  vi.useFakeTimers();
+  await show("body");
+  expect(state.read).not.toHaveBeenCalled();
+  const link = container.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!;
+  await act(async () => {
+    link.dispatchEvent(new MouseEvent("mouseenter"));
+    await vi.advanceTimersByTimeAsync(400);
+  });
+  expect(state.read).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "env-b",
+    input: {
+      projectId: "project-env-b",
+      host: "github.com",
+      repository: "acme/repo",
+      number: 42,
+    },
+  });
+  expect(surfaces()).toEqual([]);
+  expect(state.command).not.toHaveBeenCalled();
+});
 
 it("confirms a reference through the source PR preview before opening it", async () => {
   await show("body", "#42");

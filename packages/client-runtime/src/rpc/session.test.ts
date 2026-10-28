@@ -288,6 +288,16 @@ const SOURCE_EVENT: ServerConfigStreamEventType = {
   },
 };
 
+const LEGACY_SERVER_CONFIG = {
+  ...ENCODED_SERVER_CONFIG,
+  environment: {
+    ...ENCODED_SERVER_CONFIG.environment,
+    capabilities: {
+      repositoryIdentity: true,
+    },
+  },
+};
+
 const makeFactory = Effect.fn("TestRpcSessionFactory.make")(function* (
   options: RpcSession.RpcSessionOptions = {},
 ) {

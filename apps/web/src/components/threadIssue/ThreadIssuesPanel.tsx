@@ -1,7 +1,7 @@
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useEnvironmentScope } from "~/state/session";
-import { threadIssueKeyOf, type ScopedThreadRef, type ThreadIssueLink } from "@t3tools/contracts";
+import type { ScopedThreadRef, ThreadIssueLink } from "@t3tools/contracts";
 import {
   ArrowUpRightIcon,
   CircleDotIcon,
@@ -29,6 +29,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "..
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { ScrollArea } from "../ui/scroll-area";
 import { openLinkThreadIssueDialog } from "./LinkThreadIssueDialog";
+import { ThreadIssueTrees } from "./ThreadIssueTrees";
 
 function ThreadIssueRow({
   link,
@@ -147,6 +148,7 @@ export function ThreadIssuesPanel({ threadRef }: { threadRef: ScopedThreadRef })
     });
   };
   const refreshOnScopeChange = useEffectEvent(refreshLinks);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- re-reads the thread's issue snapshots from their trackers each time this panel opens on a thread
   useEffect(() => {
     refreshedThread.current = threadKey;
     if (canRefresh) refreshOnScopeChange();
@@ -193,15 +195,18 @@ export function ThreadIssuesPanel({ threadRef }: { threadRef: ScopedThreadRef })
     <div className="flex h-full min-h-0 flex-col">
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col p-1.5">
-          {items.map((link) => (
-            <ThreadIssueRow
-              key={threadIssueKeyOf(link)}
-              link={link}
-              canUnlink={canUnlink}
-              onOpen={openIssue}
-              onUnlink={handleUnlink}
-            />
-          ))}
+          <ThreadIssueTrees
+            threadRef={threadRef}
+            links={items}
+            renderLinked={(link) => (
+              <ThreadIssueRow
+                link={link}
+                canUnlink={canUnlink}
+                onOpen={openIssue}
+                onUnlink={handleUnlink}
+              />
+            )}
+          />
         </div>
       </ScrollArea>
       <footer className="flex items-center justify-between border-t border-border/60 px-2 py-1.5 text-2xs text-muted-foreground">

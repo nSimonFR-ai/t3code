@@ -471,3 +471,32 @@ describe("V2 preview upgrade", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });
+
+describe("nic-os fork Issues stack upgrade", () => {
+  it.effect("retires the fork's 62/63 issue migrations and runs main's", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 61 });
+      yield* sql`ALTER TABLE projection_threads ADD COLUMN issue_links_json TEXT NOT NULL DEFAULT '[]'`;
+      yield* sql`CREATE TABLE work_item_links (id TEXT PRIMARY KEY)`;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (62, 'ProjectionThreadIssues'), (63, 'WorkItemLinks')`;
+
+      yield* runMigrations();
+
+      assert.deepStrictEqual(
+        (yield* sql<{ migration_id: number; name: string }>`
+          SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`).map(
+          (row) => [row.migration_id, row.name],
+        ),
+        migrationManifest.map(([id, name]) => [id, name]),
+      );
+      assert.deepStrictEqual(
+        yield* sql`SELECT name FROM sqlite_master WHERE name = 'work_item_links'`,
+        [],
+      );
+      const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_threads)`;
+      assert.isFalse(columns.some((column) => column.name === "issue_links_json"));
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+});

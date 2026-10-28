@@ -1000,10 +1000,20 @@ export const IssueAssigneeCandidatesPage = Schema.Struct({
   truncated: Schema.optional(Schema.Boolean),
 });
 export type IssueAssigneeCandidatesPage = typeof IssueAssigneeCandidatesPage.Type;
+/**
+ * A parent or child in a hierarchy page. A tracker that reads more in the same request may add
+ * the relative's change requests and its own children, so a tree needs no read per row.
+ */
+export const IssueHierarchyRelative = Schema.Struct({
+  ...IssueRelation.fields,
+  linkedPullRequests: Schema.optional(Schema.Array(IssueLinkedPullRequest)),
+  children: Schema.optional(Schema.Array(IssueRelation)),
+});
+export type IssueHierarchyRelative = typeof IssueHierarchyRelative.Type;
 export const IssueHierarchyPage = Schema.Struct({
-  parent: Schema.NullOr(IssueRelation),
+  parent: Schema.NullOr(IssueHierarchyRelative),
   children: Schema.Struct({
-    items: Schema.Array(IssueRelation),
+    items: Schema.Array(IssueHierarchyRelative),
     nextCursor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
     truncated: Schema.optional(Schema.Boolean),
   }),

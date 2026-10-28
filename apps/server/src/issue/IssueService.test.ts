@@ -20,12 +20,14 @@ import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/Linear
 import * as GitHubRest from "@t3tools/source-control-github/server/GitHubRest";
 import * as GitHubRequestPolicy from "@t3tools/source-control-github/server/GitHubRequestPolicy";
 import * as GitHubCredentials from "@t3tools/source-control-github/server/GitHubCredentials";
+import * as GitHubAppSignIn from "@t3tools/source-control-github/server/GitHubAppSignIn";
 import * as GitHubQuota from "@t3tools/source-control-github/server/GitHubQuota";
 import * as Redacted from "effect/Redacted";
 import * as GitHubIssueTracker from "@t3tools/source-control-github/server/GitHubIssueTracker";
 import {
   IssueTrackerKind,
   IssueUpdateInput,
+  SourceControlProviderKind,
   IssueSetDependencyInput,
   IssueViewerPermissions,
   type IssueTrackerProjectBinding,
@@ -80,10 +82,17 @@ function nativeGitHubTracker(input: {
           source: "env" as const,
           fingerprint: "fixture",
         }),
+      saved: () => Effect.succeedNone,
+      fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
       invalidate: () => Effect.void,
     }),
     GitHubQuota.layer,
     RateLimit.layer,
+    Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({
+      enabled: false,
+      token: () => Effect.succeedNone,
+      invalidate: () => Effect.void,
+    }),
   );
   return GitHubIssueTracker.make.pipe(
     Effect.provide(
@@ -163,7 +172,7 @@ function project(input: {
               remoteName: "origin",
               remoteUrl: `https://${host}/${input.repository}.git`,
             },
-            provider: input.provider ?? "github",
+            provider: SourceControlProviderKind.make(input.provider ?? "github"),
             displayName: input.repository,
           },
         }
@@ -2953,7 +2962,7 @@ it.effect(
                 Layer.succeed(
                   IssueTrackerHost.IssueTrackerHost,
                   IssueTrackerHost.IssueTrackerHost.of({
-                    credentials: { get: () => Effect.succeed(Option.some("fake-token")) },
+                    credentials: { get: () => Effect.succeedSome("fake-token") },
                   }),
                 ),
                 issueCryptoLayer((size) => new Uint8Array(size).fill(1)),

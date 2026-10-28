@@ -645,7 +645,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     IssueCompose: createNativeStackScreen({
       screen: IssueComposeSheet,
       options: {
-        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        ...HORIZONTAL_FORM_SHEET_OPTIONS,
         sheetAllowedDetents: [0.75, 0.92],
         sheetGrabberVisible: true,
         headerShown: false,
@@ -654,7 +654,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     IssueCreate: createNativeStackScreen({
       screen: IssueCreateSheet,
       options: {
-        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        ...HORIZONTAL_FORM_SHEET_OPTIONS,
         sheetAllowedDetents: [0.92],
         sheetGrabberVisible: true,
         headerShown: false,
@@ -664,7 +664,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
       screen: IssueCandidatesScreen,
       options: {
         ...DETAIL_HEADER_OPTIONS,
-        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        ...HORIZONTAL_FORM_SHEET_OPTIONS,
         sheetAllowedDetents: [0.75, 0.92],
         sheetGrabberVisible: true,
         headerBackVisible: false,

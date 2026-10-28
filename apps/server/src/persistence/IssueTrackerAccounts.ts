@@ -52,21 +52,23 @@ const make = Effect.gen(function* () {
           : new PersistenceSqlError({ operation: "listIssueTrackerAccounts", cause }),
       ),
     ),
-    set: (account) =>
-      sql`INSERT INTO issue_tracker_accounts (tracker, connection_id, host, account_id)
+    set: Effect.fn("IssueTrackerAccountsRepository.set")(function (account) {
+      return sql`INSERT INTO issue_tracker_accounts (tracker, connection_id, host, account_id)
       VALUES (${account.tracker}, ${account.connectionId}, ${account.host}, ${account.accountId})`.pipe(
         Effect.asVoid,
         Effect.mapError(
           (cause) => new PersistenceSqlError({ operation: "setIssueTrackerAccount", cause }),
         ),
-      ),
-    remove: (tracker, connectionId) =>
-      sql`DELETE FROM issue_tracker_accounts WHERE tracker = ${tracker} AND connection_id = ${connectionId}`.pipe(
+      );
+    }),
+    remove: Effect.fn("IssueTrackerAccountsRepository.remove")(function (tracker, connectionId) {
+      return sql`DELETE FROM issue_tracker_accounts WHERE tracker = ${tracker} AND connection_id = ${connectionId}`.pipe(
         Effect.asVoid,
         Effect.mapError(
           (cause) => new PersistenceSqlError({ operation: "removeIssueTrackerAccount", cause }),
         ),
-      ),
+      );
+    }),
   });
 });
 

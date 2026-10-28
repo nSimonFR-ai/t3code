@@ -526,34 +526,32 @@ query T3Hierarchy($id: String!, $first: Int!, $after: String) {
       key
     }
     parent {
-      id
-      identifier
-      url
-      team {
-        key
-      }
-      title
-      state {
-        id
-        name
-        type
-        position
+      ...LinearHierarchyRelative
+      attachments(first: 5) {
+        nodes {
+          url
+          title
+          sourceType
+          metadata
+        }
       }
     }
     children(first: $first, after: $after) {
       nodes {
-        id
-        identifier
-        url
-        team {
-          key
+        ...LinearHierarchyRelative
+        # Pull requests and one more level down, so a thread's issue tree reads in one query.
+        attachments(first: 5) {
+          nodes {
+            url
+            title
+            sourceType
+            metadata
+          }
         }
-        title
-        state {
-          id
-          name
-          type
-          position
+        children(first: 20) {
+          nodes {
+            ...LinearHierarchyRelative
+          }
         }
       }
       pageInfo {
@@ -561,6 +559,22 @@ query T3Hierarchy($id: String!, $first: Int!, $after: String) {
         endCursor
       }
     }
+  }
+}
+
+fragment LinearHierarchyRelative on Issue {
+  id
+  identifier
+  url
+  team {
+    key
+  }
+  title
+  state {
+    id
+    name
+    type
+    position
   }
 }
 

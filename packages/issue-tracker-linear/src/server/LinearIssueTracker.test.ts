@@ -2670,7 +2670,17 @@ it.effect("checks the comment target and lets native token rights decide edits",
 it.effect("pages hierarchy, history and attachments while checking the source scope", () =>
   Effect.gen(function* () {
     const next = { hasNextPage: true, endCursor: "next" };
-    const relation = issue("ENG-8");
+    const pullRequest = {
+      url: "https://github.com/acme/repo/pull/9",
+      title: "Split",
+      sourceType: "github",
+      metadata: { status: "open" },
+    };
+    const relation = {
+      ...issue("ENG-8"),
+      attachments: { nodes: [pullRequest] },
+      children: { nodes: [issue("ENG-9")] },
+    };
     const history = {
       id: "history-1",
       createdAt: "2026-07-02T00:00:00.000Z",
@@ -2687,7 +2697,11 @@ it.effect("pages hierarchy, history and attachments while checking the source sc
     let source = "ENG-7";
     const test = fakeLinear({
       T3Hierarchy: () => ({
-        issue: { ...issue(source), parent: null, children: connectionFixture([relation], next) },
+        issue: {
+          ...issue(source),
+          parent: { ...issue("ENG-1"), attachments: { nodes: [] } },
+          children: connectionFixture([relation], next),
+        },
       }),
       T3History: () => ({
         issue: { ...issue(source), history: connectionFixture([history], next) },
@@ -2711,8 +2725,17 @@ it.effect("pages hierarchy, history and attachments while checking the source sc
     });
     const api = yield* test.tracker;
     const input = { ...target, key: "ENG-7", limit: 1 };
-    expect((yield* api.getHierarchy(input)).children).toMatchObject({
-      items: [{ key: "ENG-8", scope: "ENG" }],
+    const hierarchy = yield* api.getHierarchy(input);
+    expect(hierarchy.parent).toMatchObject({ key: "ENG-1", linkedPullRequests: [] });
+    expect(hierarchy.children).toMatchObject({
+      items: [
+        {
+          key: "ENG-8",
+          scope: "ENG",
+          linkedPullRequests: [{ number: 9, state: "open" }],
+          children: [{ key: "ENG-9" }],
+        },
+      ],
       nextCursor: "next",
     });
     const historyPage = yield* api.getHistory(input);

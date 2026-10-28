@@ -31,6 +31,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import * as GitHubCredentials from "@t3tools/source-control-github/server/GitHubCredentials";
+import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 
 const issue = {
   projectId: ProjectId.make("linear-project"),
@@ -130,6 +131,7 @@ describe("Linear media", () => {
           Layer.mock(ProjectFaviconResolver.ProjectFaviconResolver)({}),
           Layer.mock(NativeAppIconResolver.NativeAppIconResolver)({}),
           Layer.mock(GitHubCredentials.GitHubCredentials)({}),
+          Layer.succeed(BuiltInDrivers.SourceControlDrivers, []),
         ).pipe(Layer.provideMerge(NodeServices.layer));
         const signed = yield* issueAssetUrl({
           resource: { _tag: "linear-media", issue, url },

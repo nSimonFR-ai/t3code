@@ -8,6 +8,7 @@ import { IssueDetail } from "@t3tools/contracts";
 import * as GitHubRest from "./GitHubRest.ts";
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
 import * as Redacted from "effect/Redacted";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -207,10 +208,17 @@ function tracker(
           source: "env" as const,
           fingerprint: "fixture",
         }),
+      saved: () => Effect.succeedNone,
+      fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
       invalidate: () => Effect.void,
     }),
     GitHubQuota.layer,
     SourceControlRateLimit.layer,
+    Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({
+      enabled: false,
+      token: () => Effect.succeedNone,
+      invalidate: () => Effect.void,
+    }),
   );
   return GitHubIssueTracker.make.pipe(
     Effect.provide(

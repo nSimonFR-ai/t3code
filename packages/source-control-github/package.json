@@ -11,6 +11,10 @@
       "types": "./src/server/driver.ts",
       "import": "./src/server/driver.ts"
     },
+    "./server/GitHubAppSignIn": {
+      "types": "./src/server/GitHubAppSignIn.ts",
+      "import": "./src/server/GitHubAppSignIn.ts"
+    },
     "./server/GitHubCredentials": {
       "types": "./src/server/GitHubCredentials.ts",
       "import": "./src/server/GitHubCredentials.ts"

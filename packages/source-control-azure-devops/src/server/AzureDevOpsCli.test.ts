@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it, afterEach, describe, vi } from "@effect/vitest";
+import { assert, it, afterEach, describe, expect, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -112,7 +112,7 @@ describe("AzureDevOpsCli.layer", () => {
         }),
         output,
       );
-      assert.deepStrictEqual(mockRun.mock.calls[0]?.[0], {
+      expect(mockRun.mock.calls[0]?.[0]).toEqual({
         operation: "AzureDevOpsCli.execute",
         command: "az",
         cwd: "/repo",
@@ -129,6 +129,8 @@ describe("AzureDevOpsCli.layer", () => {
         ],
         timeoutMs: 60_000,
         maxOutputBytes: 8 * 1024 * 1024,
+        classifyFailure: expect.any(Function),
+        notFoundDetail: "Pull request not found.",
       });
     }).pipe(Effect.provide(layer)),
   );

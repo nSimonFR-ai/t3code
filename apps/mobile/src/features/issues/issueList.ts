@@ -1,3 +1,4 @@
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import {
   createIssueSourceRefreshQueue,
   holdIssueListAnswer,
@@ -8,7 +9,6 @@ import {
 } from "@t3tools/client-runtime/state/issues";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
-  pullRequestHostOf,
   issueScopeKeyOf,
   issueHostKey,
   type EnvironmentId,
@@ -19,7 +19,6 @@ import {
   type IssueTrackerSummary,
   type SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import * as Schema from "effect/Schema";
 import { Atom, type AtomRegistry } from "effect/reactivity";
 import type { IssueListFilters } from "../../persistence/mobile-preferences";
@@ -479,11 +478,11 @@ export function issueCreateScopes(
       const identity = candidate.repositoryIdentity;
       const kind = identity?.provider as SourceControlProviderKind | undefined;
       if (!identity || !kind) continue;
-      const host = pullRequestHostOf(identity, kind);
+      const host = sourceControlClients.changeRequestHost(identity, kind);
       const scope =
         kind === "azure-devops"
           ? azureDevOpsIssueScope(host, identity.displayName)
-          : sourceControlRepositorySelector(identity);
+          : sourceControlClients.repositorySelector(identity);
       if (scope === null) continue;
       const tracker = held.answer.trackers.find(
         (tracker) =>

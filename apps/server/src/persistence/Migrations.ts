@@ -244,8 +244,7 @@ const reconcileIssueMigrations = Effect.fn("reconcileIssueMigrations")(function*
       if (
         !issueHistory.every(
           (row, index) =>
-            row.migration_id === firstIssueId + index &&
-            row.name === ISSUE_MIGRATION_NAMES[index],
+            row.migration_id === firstIssueId + index && row.name === ISSUE_MIGRATION_NAMES[index],
         )
       ) {
         return yield* new Migrator.MigrationError({
@@ -254,9 +253,7 @@ const reconcileIssueMigrations = Effect.fn("reconcileIssueMigrations")(function*
         });
       }
       yield* assertV2MigrationsCanRun(firstIssueId - 1);
-      const missing = migrationEntries.filter(
-        ([id]) => id >= firstIssueId && id < targetIssueId,
-      );
+      const missing = migrationEntries.filter(([id]) => id >= firstIssueId && id < targetIssueId);
       for (const [id, name, migration] of missing) {
         yield* Effect.mapError(
           migration,
@@ -280,6 +277,38 @@ const reconcileIssueMigrations = Effect.fn("reconcileIssueMigrations")(function*
   );
 });
 
+// The nic-os fork's #6315 Issues builds recorded 62 ProjectionThreadIssues and 63
+// WorkItemLinks, ids main now owns. Neither schema is used by this build, so drop them and
+// their ledger rows; the migrator then runs main's 62+ and the issue migrations normally.
+const retireForkIssueStackMigrations = Effect.fn("retireForkIssueStackMigrations")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const tables = yield* sql`
+        SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+      `;
+      if (tables.length === 0) return;
+      const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+        SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 62
+        ORDER BY migration_id
+      `;
+      const isForkStack =
+        history.length === 2 &&
+        history[0]?.migration_id === 62 &&
+        history[0].name === "ProjectionThreadIssues" &&
+        history[1]?.migration_id === 63 &&
+        history[1].name === "WorkItemLinks";
+      if (!isForkStack) return;
+      yield* sql`DROP TABLE IF EXISTS work_item_links`;
+      const columns = yield* sql<{ readonly name: string }>`PRAGMA table_info(projection_threads)`;
+      if (columns.some((column) => column.name === "issue_links_json")) {
+        yield* sql`ALTER TABLE projection_threads DROP COLUMN issue_links_json`;
+      }
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id IN (62, 63)`;
+    }),
+  );
+});
+
 const run = Migrator.make({});
 
 export interface RunMigrationsOptions {
@@ -292,6 +321,9 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+  if (toMigrationInclusive === undefined || toMigrationInclusive >= 62) {
+    yield* retireForkIssueStackMigrations();
+  }
   const issueMigrations = includesV2 ? yield* reconcileIssueMigrations(toMigrationInclusive) : [];
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);

@@ -46,6 +46,11 @@ vi.mock("../lib/openExternalUrl", () => ({
     return true;
   },
 }));
+vi.mock("../state/server", async () => {
+  const { Atom } = await import("effect/reactivity");
+  // The real module starts the mobile connection runtime; links only read the configs.
+  return { environmentServerConfigsAtom: Atom.make(() => harness.configs) };
+});
 vi.mock("../state/entities", () => ({
   useProjects: () => harness.projects,
   useServerConfigs: () => harness.configs,
@@ -97,7 +102,8 @@ vi.mock("../state/issues", async () => {
   return { issueEnvironment: createIssueEnvironmentAtoms(Atom.runtime(environments)) };
 });
 
-import { githubMarkdownLinks } from "@t3tools/shared/githubMarkdownLinks";
+import { changeRequestReferenceAutolinker } from "@t3tools/client-runtime/pull-request-markdown";
+import { linkReferenceAutolinks } from "../features/pull-requests/pullRequestAutolinks";
 import { useOpenIssueLink } from "./useOpenIssueLink";
 
 const decodeRepositoryIdentity = Schema.decodeSync(RepositoryIdentity);
@@ -233,7 +239,13 @@ it.each([
 
 it("carries a PR body's generated #N link to the issue route as its original URL", async () => {
   const href = /\]\(([^)]+)\)/u.exec(
-    githubMarkdownLinks("Stacked on #456", "https://github.com/acme/app/pull/1"),
+    linkReferenceAutolinks(
+      "Stacked on #456",
+      changeRequestReferenceAutolinker({
+        provider: "github",
+        url: "https://github.com/acme/app/pull/1",
+      }),
+    ),
   )![1]!;
   expect(await open(href)).toBe(true);
   expect(calls).toHaveLength(1);
