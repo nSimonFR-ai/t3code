@@ -42,6 +42,7 @@ import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderR
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as IssueService from "./issue/IssueService.ts";
 import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
+import { importLegacyLinear } from "./issue/LegacyLinearImport.ts";
 import * as IssueTrackerBindings from "./persistence/IssueTrackerBindings.ts";
 import * as IssueTrackerAccounts from "./persistence/IssueTrackerAccounts.ts";
 import * as IssueTrackerRegistry from "./issue/IssueTrackerRegistry.ts";
@@ -574,6 +575,10 @@ const layerThreadIssueWorker = Layer.effectDiscard(
   ThreadIssueService.ThreadIssueService.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(layerThreadIssueService));
 
+const layerLegacyLinearImport = Layer.effectDiscard(Effect.forkScoped(importLegacyLinear)).pipe(
+  Layer.provide(layerIssueService),
+);
+
 const layerProviderInstallationRefresh = Layer.effectDiscard(
   Effect.gen(function* () {
     const antigravity = yield* AntigravityInstallation.AntigravityInstallation;
@@ -620,6 +625,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   layerThreadPullRequestWorker,
   layerThreadIssueWorker,
+  layerLegacyLinearImport,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(
     Effect.gen(function* () {

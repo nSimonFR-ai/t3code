@@ -51,6 +51,7 @@ import {
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import { stashLegacyLinearBindings } from "./issue/LegacyLinearImport.ts";
 import {
   readSecretFieldValues,
   sourceControlHostSecretName,
@@ -652,6 +653,9 @@ const make = Effect.gen(function* () {
 
     if (yield* readConfigExists) {
       const raw = yield* readRawConfig;
+      yield* stashLegacyLinearBindings(raw).pipe(
+        Effect.provideService(ServerSecretStore.ServerSecretStore, secretStore),
+      );
       const decoded = decodeServerSettingsJsonExit(raw);
       const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
       if (legacySettings._tag === "Success") {
