@@ -8,7 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import * as DateTime from "effect/DateTime";
-import { act, createElement } from "react";
+import { act, createElement, Fragment } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
@@ -35,41 +35,37 @@ vi.mock("~/rightPanelStore", () => ({
 }));
 vi.mock("~/localApi", () => ({ readLocalApi: () => null }));
 vi.mock("~/hooks/useCopyToClipboard", () => ({ writeTextToClipboard: vi.fn() }));
-vi.mock("./LinkThreadIssueDialog", () => ({ openLinkThreadIssueDialog: vi.fn() }));
-vi.mock("./ThreadIssueTrees", async () => {
-  const { Fragment, createElement } = await import("react");
-  return {
-    ThreadIssueTrees: ({
-      links,
-      renderLinked,
-    }: {
-      links: ReadonlyArray<{ key: string }>;
-      renderLinked: (link: unknown) => unknown;
-    }) =>
-      links.map((link) => createElement(Fragment, { key: link.key }, renderLinked(link) as never)),
-  };
-});
 vi.mock("../issue/issuePresentation", () => ({
   issueTrackerPresentation: () => ({ providerName: "GitHub", Icon: () => null }),
   IssueStateGlyph: () => null,
 }));
 vi.mock("../ui/button", () => ({ Button: "button" }));
-vi.mock("../ui/empty", () => ({
-  Empty: "div",
-  EmptyDescription: "div",
-  EmptyHeader: "div",
-  EmptyMedia: "div",
-  EmptyTitle: "div",
-}));
 vi.mock("../ui/menu", () => ({
   Menu: () => null,
   MenuItem: "div",
   MenuPopup: "div",
   MenuTrigger: "div",
 }));
-vi.mock("../ui/scroll-area", () => ({ ScrollArea: "div" }));
 
-import { ThreadIssuesPanel } from "./ThreadIssuesPanel";
+import { ThreadIssueRow, useThreadIssueLinks } from "./ThreadIssueLinks";
+
+function LinkedIssues({ threadRef }: { threadRef: Parameters<typeof useThreadIssueLinks>[0] }) {
+  const issues = useThreadIssueLinks(threadRef, true);
+  return createElement(
+    Fragment,
+    null,
+    issues.error,
+    ...issues.items.map((link) =>
+      createElement(ThreadIssueRow, {
+        key: link.key,
+        link,
+        canUnlink: issues.canUnlink,
+        onOpen: issues.openIssue,
+        onUnlink: issues.unlink,
+      }),
+    ),
+  );
+}
 
 const threadRef = {
   environmentId: EnvironmentId.make("remote"),
@@ -126,7 +122,7 @@ async function mount() {
       createElement(
         RegistryContext.Provider,
         { value: registry },
-        createElement(ThreadIssuesPanel, { threadRef }),
+        createElement(LinkedIssues, { threadRef }),
       ),
     );
   });

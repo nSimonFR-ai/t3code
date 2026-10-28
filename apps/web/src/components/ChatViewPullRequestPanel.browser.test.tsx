@@ -48,11 +48,6 @@ vi.mock("./issue/IssueDetailPanel", () => ({
     </button>
   ),
 }));
-vi.mock("./threadIssue/ThreadIssuesPanel", () => ({
-  ThreadIssuesPanel: ({ threadRef }: { threadRef: { environmentId: EnvironmentId } }) => (
-    <h2>Linked issues on {threadRef.environmentId}</h2>
-  ),
-}));
 
 import { useRightPanelStore, selectSelectedRightPanelSurface } from "../rightPanelStore";
 import { ChatViewIssuePanel } from "./ChatViewIssuePanel";
@@ -121,51 +116,43 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it.each(["issues", "issue"] as const)(
-  "waits for the %s source config before checking support",
-  async (kind) => {
-    const environmentId = kind === "issues" ? threadRef.environmentId : EnvironmentId.make("b");
-    const surface =
-      kind === "issues"
-        ? { kind, id: "issues" as const }
-        : {
-            kind,
-            id: "issue:test" as const,
-            environmentId,
-            projectId: "project-b",
-            tracker: "linear",
-            scope: "workspace/ENG",
-            key: "ENG-7",
-          };
-    for (const supported of [null, false, true]) {
-      const config = (issues: boolean | null) =>
-        issues === null ? null : ({ environment: { capabilities: { issues } } } as ServerConfig);
-      const environmentById = new Map([
-        [threadRef.environmentId, { serverConfig: config(kind === "issues" ? supported : true) }],
-        [EnvironmentId.make("b"), { serverConfig: config(kind === "issue" ? supported : true) }],
-      ]);
-      await act(async () =>
-        root.render(
-          <ChatViewIssuePanel
-            surface={surface}
-            threadRef={threadRef}
-            environmentById={environmentById}
-          />,
-        ),
-      );
-      expect(element.textContent).toContain(
-        supported === null
-          ? "Loading PR"
-          : supported === false
-            ? "Issues unavailable"
-            : kind === "issues"
-              ? "Linked issues on a"
-              : "Linked PR on b",
-      );
-      if (supported === null) expect(element.textContent).not.toContain("Update this environment");
-    }
-  },
-);
+it("waits for the issue's source config before checking support", async () => {
+  const environmentId = EnvironmentId.make("b");
+  const surface = {
+    kind: "issue" as const,
+    id: "issue:test" as const,
+    environmentId,
+    projectId: "project-b",
+    tracker: "linear",
+    scope: "workspace/ENG",
+    key: "ENG-7",
+  };
+  for (const supported of [null, false, true]) {
+    const config = (issues: boolean | null) =>
+      issues === null ? null : ({ environment: { capabilities: { issues } } } as ServerConfig);
+    const environmentById = new Map([
+      [threadRef.environmentId, { serverConfig: config(true) }],
+      [EnvironmentId.make("b"), { serverConfig: config(supported) }],
+    ]);
+    await act(async () =>
+      root.render(
+        <ChatViewIssuePanel
+          surface={surface}
+          threadRef={threadRef}
+          environmentById={environmentById}
+        />,
+      ),
+    );
+    expect(element.textContent).toContain(
+      supported === null
+        ? "Loading PR"
+        : supported === false
+          ? "Issues unavailable"
+          : "Linked PR on b",
+    );
+    if (supported === null) expect(element.textContent).not.toContain("Update this environment");
+  }
+});
 
 it.each([
   ["issue", false, true, "b", "PR on b: acme/web#42"],

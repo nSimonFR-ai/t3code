@@ -1917,9 +1917,9 @@ export default function ChatView(props: ChatViewProps) {
     (activeThreadShell ?? activeThread)?.pullRequests ?? [],
   );
   const visiblePullRequestCount = visiblePullRequests.length;
+  // Linked items lists the thread's pull requests and, where the server tracks issues, its issues.
   const pullRequestsSurfaceAvailable =
-    isServerThread && supportsThreadPullRequests && visiblePullRequestCount > 0;
-  const issuesSurfaceAvailable = isServerThread && supportsIssues;
+    isServerThread && supportsThreadPullRequests && (visiblePullRequestCount > 0 || supportsIssues);
   const { state: deviceState, loaded: deviceStateLoaded } = useDeviceState(
     activeThreadRef?.environmentId ?? null,
   );
@@ -2321,7 +2321,6 @@ export default function ChatView(props: ChatViewProps) {
     addFilesSurfaceStable,
     addPullRequestSurfaceStable,
     addPullRequestsSurfaceStable,
-    addIssuesSurfaceStable,
     closePreviewPanelStable,
     copyRightPanelFilePathStable,
     createBrowserSurface,
@@ -2354,7 +2353,6 @@ export default function ChatView(props: ChatViewProps) {
     rightPanelMaximized,
     supportsPullRequests,
     pullRequestsSurfaceAvailable,
-    issuesSurfaceAvailable,
     gitCwd,
     activeProjectCwd,
     explicitDiffOpenRef,
@@ -3065,7 +3063,7 @@ export default function ChatView(props: ChatViewProps) {
   }
 
   const rightPanelContent = activeThreadRef ? (
-    renderedRightPanelSurface?.kind === "issues" || renderedRightPanelSurface?.kind === "issue" ? (
+    renderedRightPanelSurface?.kind === "issue" ? (
       <ChatViewIssuePanel
         key={renderedRightPanelSurface.id}
         surface={renderedRightPanelSurface}
@@ -3840,7 +3838,6 @@ export default function ChatView(props: ChatViewProps) {
           onAddFiles={addFilesSurfaceStable}
           onAddPullRequest={addPullRequestSurfaceStable}
           onAddPullRequests={addPullRequestsSurfaceStable}
-          onAddIssues={addIssuesSurfaceStable}
           onAddDevice={addDeviceSurfaceStable}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
@@ -3848,7 +3845,6 @@ export default function ChatView(props: ChatViewProps) {
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           pullRequestsAvailable={pullRequestsSurfaceAvailable}
-          issuesAvailable={issuesSurfaceAvailable}
           deviceAvailable={activeThreadRef !== null}
         >
           {rightPanelContent}

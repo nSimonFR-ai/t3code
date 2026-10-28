@@ -1362,11 +1362,11 @@ function OpenCommandPaletteDialog(props: {
     actionItems.push({
       kind: "action",
       value: "action:open-thread-issues",
-      searchTerms: ["issues", "linked", "tickets"],
-      title: "Show linked issues",
+      searchTerms: ["issues", "linked", "tickets", "items", "pull requests"],
+      title: "Show linked items",
       icon: <IssueGlyph.issue className={ITEM_ICON_CLASS} />,
       run: async () => {
-        useRightPanelStore.getState().open(threadRef, "issues");
+        useRightPanelStore.getState().open(threadRef, "pull-requests");
       },
     });
   }

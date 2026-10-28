@@ -32,7 +32,6 @@ const RIGHT_PANEL_KINDS = [
   "pull-request",
   "pull-requests",
   "issue",
-  "issues",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -87,7 +86,6 @@ export type RightPanelSurface =
       detailTab?: PullRequestDetailTab;
     }
   | { id: "pull-requests"; kind: "pull-requests" }
-  | { id: "issues"; kind: "issues" }
   | {
       id: `issue:${string}`;
       kind: "issue";
@@ -243,8 +241,6 @@ const singletonSurface = (
       return { id: "files", kind };
     case "pull-requests":
       return { id: "pull-requests", kind };
-    case "issues":
-      return { id: "issues", kind };
     case "device":
       return { id: "device", kind };
   }
@@ -530,104 +526,111 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
               const validThreadState =
                 threadState && typeof threadState === "object" ? threadState : null;
               const surfaces = Array.isArray(validThreadState?.surfaces)
-                ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
-                    const kind = (surface as { kind?: string }).kind;
-                    if (kind === "plan" || kind === "agents") return [];
-                    if (
-                      (surface.kind === "file" || surface.kind === "files") &&
-                      "folderTrail" in surface &&
-                      typeof surface.folderTrail !== "string"
-                    ) {
-                      const { folderTrail: _invalid, ...rest } = surface;
-                      surface = rest;
-                    }
-                    if (surface.kind === "file") {
-                      const revealLine =
-                        typeof surface.revealLine === "number" &&
-                        Number.isFinite(surface.revealLine)
-                          ? Math.max(1, Math.trunc(surface.revealLine))
-                          : null;
-                      const revealRequestId =
-                        typeof surface.revealRequestId === "number" &&
-                        Number.isSafeInteger(surface.revealRequestId) &&
-                        surface.revealRequestId >= 0
-                          ? surface.revealRequestId
-                          : 0;
-                      return [{ ...surface, revealLine, revealRequestId }];
-                    }
-                    if (surface.kind === "pull-request") {
+                ? validThreadState.surfaces
+                    .flatMap<RightPanelSurface>((surface) => {
+                      const kind = (surface as { kind?: string }).kind;
+                      if (kind === "plan" || kind === "agents") return [];
+                      // Linked issues now share the linked items tab with pull requests.
+                      if (kind === "issues") return [singletonSurface("pull-requests")];
                       if (
-                        typeof surface.projectId !== "string" ||
-                        typeof surface.repository !== "string" ||
-                        typeof surface.number !== "number" ||
-                        !Number.isSafeInteger(surface.number) ||
-                        surface.number < 1
+                        (surface.kind === "file" || surface.kind === "files") &&
+                        "folderTrail" in surface &&
+                        typeof surface.folderTrail !== "string"
+                      ) {
+                        const { folderTrail: _invalid, ...rest } = surface;
+                        surface = rest;
+                      }
+                      if (surface.kind === "file") {
+                        const revealLine =
+                          typeof surface.revealLine === "number" &&
+                          Number.isFinite(surface.revealLine)
+                            ? Math.max(1, Math.trunc(surface.revealLine))
+                            : null;
+                        const revealRequestId =
+                          typeof surface.revealRequestId === "number" &&
+                          Number.isSafeInteger(surface.revealRequestId) &&
+                          surface.revealRequestId >= 0
+                            ? surface.revealRequestId
+                            : 0;
+                        return [{ ...surface, revealLine, revealRequestId }];
+                      }
+                      if (surface.kind === "pull-request") {
+                        if (
+                          typeof surface.projectId !== "string" ||
+                          typeof surface.repository !== "string" ||
+                          typeof surface.number !== "number" ||
+                          !Number.isSafeInteger(surface.number) ||
+                          surface.number < 1
+                        ) {
+                          return [];
+                        }
+                        const { environmentId, ...rest } = surface;
+                        return [
+                          pullRequestSurface({
+                            ...rest,
+                            ...(typeof environmentId === "string" ? { environmentId } : {}),
+                          }),
+                        ];
+                      }
+                      if (surface.kind === "issue") {
+                        if (
+                          typeof surface.projectId !== "string" ||
+                          (surface.connectionId !== undefined &&
+                            (typeof surface.connectionId !== "string" ||
+                              !surface.connectionId.trim() ||
+                              surface.connectionId.trim() !== surface.connectionId ||
+                              surface.connectionId.length > 128)) ||
+                          typeof surface.tracker !== "string" ||
+                          typeof surface.scope !== "string" ||
+                          typeof surface.key !== "string"
+                        ) {
+                          return [];
+                        }
+                        const { environmentId, ...rest } = surface;
+                        return [
+                          issueSurface({
+                            ...rest,
+                            ...(typeof environmentId === "string" ? { environmentId } : {}),
+                          }),
+                        ];
+                      }
+                      if (surface.kind !== "terminal") return [surface];
+                      if (
+                        !("resourceId" in surface) ||
+                        typeof surface.resourceId !== "string" ||
+                        surface.id !== `terminal:${surface.resourceId}`
                       ) {
                         return [];
                       }
-                      const { environmentId, ...rest } = surface;
-                      return [
-                        pullRequestSurface({
-                          ...rest,
-                          ...(typeof environmentId === "string" ? { environmentId } : {}),
-                        }),
-                      ];
-                    }
-                    if (surface.kind === "issue") {
-                      if (
-                        typeof surface.projectId !== "string" ||
-                        (surface.connectionId !== undefined &&
-                          (typeof surface.connectionId !== "string" ||
-                            !surface.connectionId.trim() ||
-                            surface.connectionId.trim() !== surface.connectionId ||
-                            surface.connectionId.length > 128)) ||
-                        typeof surface.tracker !== "string" ||
-                        typeof surface.scope !== "string" ||
-                        typeof surface.key !== "string"
-                      ) {
-                        return [];
-                      }
-                      const { environmentId, ...rest } = surface;
-                      return [
-                        issueSurface({
-                          ...rest,
-                          ...(typeof environmentId === "string" ? { environmentId } : {}),
-                        }),
-                      ];
-                    }
-                    if (surface.kind !== "terminal") return [surface];
-                    if (
-                      !("resourceId" in surface) ||
-                      typeof surface.resourceId !== "string" ||
-                      surface.id !== `terminal:${surface.resourceId}`
-                    ) {
-                      return [];
-                    }
-                    const terminalIds =
-                      "terminalIds" in surface && Array.isArray(surface.terminalIds)
-                        ? [
-                            ...new Set(
-                              surface.terminalIds.filter(
-                                (terminalId): terminalId is string =>
-                                  typeof terminalId === "string",
+                      const terminalIds =
+                        "terminalIds" in surface && Array.isArray(surface.terminalIds)
+                          ? [
+                              ...new Set(
+                                surface.terminalIds.filter(
+                                  (terminalId): terminalId is string =>
+                                    typeof terminalId === "string",
+                                ),
                               ),
-                            ),
-                          ]
-                        : [surface.resourceId];
-                    const activeTerminalId =
-                      "activeTerminalId" in surface &&
-                      typeof surface.activeTerminalId === "string" &&
-                      terminalIds.includes(surface.activeTerminalId)
-                        ? surface.activeTerminalId
-                        : (terminalIds[0] ?? surface.resourceId);
-                    return [
-                      {
-                        ...surface,
-                        terminalIds: terminalIds.length > 0 ? terminalIds : [surface.resourceId],
-                        activeTerminalId,
-                      },
-                    ];
-                  })
+                            ]
+                          : [surface.resourceId];
+                      const activeTerminalId =
+                        "activeTerminalId" in surface &&
+                        typeof surface.activeTerminalId === "string" &&
+                        terminalIds.includes(surface.activeTerminalId)
+                          ? surface.activeTerminalId
+                          : (terminalIds[0] ?? surface.resourceId);
+                      return [
+                        {
+                          ...surface,
+                          terminalIds: terminalIds.length > 0 ? terminalIds : [surface.resourceId],
+                          activeTerminalId,
+                        },
+                      ];
+                    })
+                    .filter(
+                      (surface, index, all) =>
+                        all.findIndex((other) => other.id === surface.id) === index,
+                    )
                 : [];
               const rawActiveSurfaceId = validThreadState?.activeSurfaceId;
               const persistedActiveSurfaceId = surfaces.some(
@@ -636,7 +639,9 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                 ? (rawActiveSurfaceId ?? null)
                 : rawActiveSurfaceId === "pull-request"
                   ? (surfaces.find((surface) => surface.kind === "pull-request")?.id ?? null)
-                  : null;
+                  : rawActiveSurfaceId === "issues"
+                    ? "pull-requests"
+                    : null;
               const isOpen =
                 surfaces.length > 0 &&
                 (typeof validThreadState?.isOpen === "boolean"

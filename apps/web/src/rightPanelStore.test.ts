@@ -756,24 +756,34 @@ describe("rightPanelStore", () => {
     ).toEqual({ inlineOpen: true, popoverOpen: true });
   });
 
-  it("keeps linked issues as one tab and restores it after closing", () => {
-    const store = useRightPanelStore.getState();
-    store.open(refA, "issues");
-    store.openFile(refA, "README.md");
-    store.open(refA, "issues");
-    expect(
-      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces.map(
-        (surface) => surface.id,
-      ),
-    ).toEqual(["issues", "file:README.md"]);
-    store.closeSurface(refA, "issues");
-    const closed = useClosedViewStore.getState().entries[0];
-    expect(closed).toMatchObject({ kind: "panel-tab", surface: { id: "issues", kind: "issues" } });
-    store.open(refA, "issues");
-    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
-      id: "issues",
-      kind: "issues",
+  it("folds a saved linked issues tab into the linked items tab", () => {
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "issues",
+          surfaces: [
+            { id: "pull-requests", kind: "pull-requests" },
+            { id: "file:README.md", kind: "file", relativePath: "README.md" },
+            { id: "issues", kind: "issues" },
+          ],
+        },
+        "env-1:thread-B": {
+          isOpen: true,
+          activeSurfaceId: "issues",
+          surfaces: [{ id: "issues", kind: "issues" }],
+        },
+      },
     });
+    const threadA = selectThreadRightPanelState(migrated.byThreadKey, refA);
+    expect(threadA.surfaces.map((surface) => surface.id)).toEqual([
+      "pull-requests",
+      "file:README.md",
+    ]);
+    expect(threadA.activeSurfaceId).toBe("pull-requests");
+    expect(selectThreadRightPanelState(migrated.byThreadKey, refB).surfaces).toEqual([
+      { id: "pull-requests", kind: "pull-requests" },
+    ]);
   });
 
   it("opens workspace-root links as the singleton files explorer", () => {

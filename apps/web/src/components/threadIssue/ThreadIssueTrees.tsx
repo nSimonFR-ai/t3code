@@ -4,6 +4,7 @@ import type {
   IssuePageRef,
   ScopedThreadRef,
   ThreadIssueLink,
+  ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { threadIssueKeyOf } from "@t3tools/contracts";
 import { CircleDotIcon } from "lucide-react";
@@ -11,7 +12,6 @@ import { Fragment, type ReactNode } from "react";
 
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { useRightPanelStore } from "~/rightPanelStore";
-import { useThreadShell } from "~/state/entities";
 import { useIssueHierarchyReads, useIssueLinkedPullRequestReads } from "~/state/issues";
 import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
@@ -55,8 +55,11 @@ function useLinkedIssueReads(
       return parent ? [{ environmentId, input: pageRefOf(link, parent) }] : [];
     });
   const spread = <A,>(level: ReadonlyArray<unknown>, answers: ReadonlyArray<A>) => {
-    let next = 0;
-    return level.map((parent) => (parent ? (answers[next++] ?? null) : null));
+    const asked = level.flatMap((parent, index) => (parent ? [index] : []));
+    return level.map((_, index) => {
+      const answer = asked.indexOf(index);
+      return answer === -1 ? null : (answers[answer] ?? null);
+    });
   };
   const grandparents = spread(parents, useIssueHierarchyReads(above(parents)).answers).map(
     (answer) => answer?.value?.parent ?? null,
@@ -152,28 +155,45 @@ function TreePullRequestRow({
   );
 }
 
+export interface ThreadIssueTreeModel {
+  readonly trees: ReturnType<typeof buildThreadIssueTrees>;
+  readonly pullRequestsByRow: ReturnType<typeof treePullRequestRows>;
+  /** Linked issues whose tree cannot be read yet; they keep their plain row. */
+  readonly unread: ReadonlyArray<ThreadIssueLink>;
+}
+
 /**
- * The thread's linked issues as trees, one per top ancestor, with the pull requests the tracker
- * reports under each issue. The thread's own pull request shows under the issue that lists it.
- * A linked issue whose tree cannot be read yet keeps its plain row.
+ * Reads the thread's linked issues into trees, one per top ancestor, with the pull requests the
+ * tracker reports under each issue and the thread's own pull requests marked where listed.
  */
+export function useThreadIssueTreeModel(
+  threadRef: ScopedThreadRef,
+  links: ReadonlyArray<ThreadIssueLink>,
+  threadPullRequests: ReadonlyArray<Pick<ThreadPullRequestLink, "url">>,
+): ThreadIssueTreeModel {
+  const reads = useLinkedIssueReads(threadRef.environmentId, links);
+  const trees = buildThreadIssueTrees(reads);
+  const read = new Set(reads.map((entry) => threadIssueKeyOf(entry.link)));
+  return {
+    trees,
+    pullRequestsByRow: treePullRequestRows(trees, threadPullRequests),
+    unread: links.filter((link) => !read.has(threadIssueKeyOf(link))),
+  };
+}
+
+/** Draws a tree model. The thread's own pull request shows under the issue that lists it. */
 export function ThreadIssueTrees({
   threadRef,
-  links,
+  model,
   renderLinked,
 }: {
   threadRef: ScopedThreadRef;
-  links: ReadonlyArray<ThreadIssueLink>;
+  model: ThreadIssueTreeModel;
   renderLinked: (link: ThreadIssueLink) => ReactNode;
 }) {
-  const reads = useLinkedIssueReads(threadRef.environmentId, links);
-  const threadPullRequests = useThreadShell(threadRef)?.pullRequests ?? [];
-  const trees = buildThreadIssueTrees(reads);
-  const pullRequestsByRow = treePullRequestRows(trees, threadPullRequests);
-  const read = new Set(reads.map((entry) => threadIssueKeyOf(entry.link)));
   return (
     <>
-      {trees.map((tree) => (
+      {model.trees.map((tree) => (
         <div key={tree.key} className="flex flex-col">
           {tree.rows.map((row) => (
             <Fragment key={`${row.depth}:${row.issue.key}`}>
@@ -184,7 +204,7 @@ export function ThreadIssueTrees({
                   <TreeRelativeRow row={row} threadRef={threadRef} />
                 )}
               </div>
-              {(pullRequestsByRow.get(row) ?? []).map((link) => (
+              {(model.pullRequestsByRow.get(row) ?? []).map((link) => (
                 <TreePullRequestRow
                   key={link.url}
                   link={link}
@@ -196,11 +216,9 @@ export function ThreadIssueTrees({
           ))}
         </div>
       ))}
-      {links
-        .filter((link) => !read.has(threadIssueKeyOf(link)))
-        .map((link) => (
-          <Fragment key={threadIssueKeyOf(link)}>{renderLinked(link)}</Fragment>
-        ))}
+      {model.unread.map((link) => (
+        <Fragment key={threadIssueKeyOf(link)}>{renderLinked(link)}</Fragment>
+      ))}
     </>
   );
 }

@@ -63,7 +63,6 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
     case "diff":
     case "files":
     case "pull-requests":
-    case "issues":
       return surface.id === surface.kind;
     case "preview":
       return surface.resourceId === null || typeof surface.resourceId === "string";
@@ -109,9 +108,24 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
   }
 };
 
+// Linked issues now share the linked items tab with pull requests.
+const withLinkedItemsSurface = (entry: unknown): unknown => {
+  const view = entry as { kind?: unknown; surface?: { kind?: unknown } } | null;
+  return view?.kind === "panel-tab" && view.surface?.kind === "issues"
+    ? { ...view, surface: { id: "pull-requests", kind: "pull-requests" } }
+    : entry;
+};
+
 export const persistedEntries = (persisted: unknown): ClosedViewEntry[] => {
   const entries = (persisted as Partial<Pick<ClosedViewStoreState, "entries">> | null)?.entries;
-  return Array.isArray(entries) ? entries.filter(isClosedViewEntry).filter(isPersistentView) : [];
+  if (!Array.isArray(entries)) return [];
+  const valid = entries
+    .map(withLinkedItemsSurface)
+    .filter(isClosedViewEntry)
+    .filter(isPersistentView);
+  return valid.filter(
+    (entry, index) => valid.findIndex((other) => sameTarget(other, entry)) === index,
+  );
 };
 
 export const useClosedViewStore = create<ClosedViewStoreState>()(

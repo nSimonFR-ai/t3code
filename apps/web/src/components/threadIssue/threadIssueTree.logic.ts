@@ -182,3 +182,19 @@ export function treePullRequestRows(
   }
   return byRow;
 }
+
+/**
+ * The thread's pull requests not already drawn under an issue in the trees, for the flat list
+ * below them: each linked pull request shows once in the linked items panel.
+ */
+export function pullRequestsOutsideIssueTrees<P extends Pick<ThreadPullRequestLink, "url">>(
+  threadPullRequests: ReadonlyArray<P>,
+  pullRequestsByRow: ReturnType<typeof treePullRequestRows>,
+): ReadonlyArray<P> {
+  const nested = new Set<string>();
+  for (const links of pullRequestsByRow.values()) {
+    for (const link of links) if (link.inThread) nested.add(pullRequestUrlKey(link.url));
+  }
+  if (nested.size === 0) return threadPullRequests;
+  return threadPullRequests.filter((link) => !nested.has(pullRequestUrlKey(link.url)));
+}

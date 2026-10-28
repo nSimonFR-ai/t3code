@@ -8,7 +8,6 @@ import {
   LinkIcon,
   MoreHorizontalIcon,
   PanelRightOpenIcon,
-  PlusIcon,
   UnlinkIcon,
 } from "lucide-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
@@ -25,13 +24,9 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { issueTrackerPresentation, IssueStateGlyph } from "../issue/issuePresentation";
 import { Button } from "../ui/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { ScrollArea } from "../ui/scroll-area";
-import { openLinkThreadIssueDialog } from "./LinkThreadIssueDialog";
-import { ThreadIssueTrees } from "./ThreadIssueTrees";
 
-function ThreadIssueRow({
+export function ThreadIssueRow({
   link,
   canUnlink,
   onOpen,
@@ -115,18 +110,35 @@ function ThreadIssueRow({
   );
 }
 
-export function ThreadIssuesPanel({ threadRef }: { threadRef: ScopedThreadRef }) {
+export interface ThreadIssueLinks {
+  readonly items: ReadonlyArray<ThreadIssueLink>;
+  /** False until the thread's shell has loaded. */
+  readonly loaded: boolean;
+  readonly error: string | null;
+  readonly syncedAt: string | undefined;
+  readonly canLink: boolean;
+  readonly canUnlink: boolean;
+  readonly openIssue: (link: ThreadIssueLink) => void;
+  readonly unlink: (link: ThreadIssueLink) => void;
+}
+
+/**
+ * The thread's linked issues, re-read from their trackers when the panel opens on a thread and
+ * on focus. With `enabled` false (an environment without issues) nothing is read or listed.
+ */
+export function useThreadIssueLinks(
+  threadRef: ScopedThreadRef,
+  enabled: boolean,
+): ThreadIssueLinks {
   const environmentId = threadRef.environmentId;
   const thread = useThreadShell(threadRef);
-  const canRefresh = useAtomValue(
-    issueEnvironment.refreshThreadLinks.permissionAtom(environmentId),
-  );
+  const canRefresh =
+    useAtomValue(issueEnvironment.refreshThreadLinks.permissionAtom(environmentId)) && enabled;
   const refresh = useAtomCommand(issueEnvironment.refreshThreadLinks, {
     reportFailure: false,
   });
-  const unlink = useAtomCommand(threadEnvironment.unlinkIssue, { reportFailure: true });
-  const canUnlink = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
-  const canLink = canUnlink;
+  const unlinkCommand = useAtomCommand(threadEnvironment.unlinkIssue, { reportFailure: true });
+  const canUnlink = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope) && enabled;
   const refreshedThread = useRef<string | null>(null);
   const threadKey = `${environmentId}:${threadRef.threadId}`;
   const [refreshError, setRefreshError] = useState({
@@ -155,76 +167,19 @@ export function ThreadIssuesPanel({ threadRef }: { threadRef: ScopedThreadRef })
   }, [canRefresh, threadKey]);
   useIssueViewRefresh(refreshLinks, [], threadKey);
 
-  const items = thread?.issues ?? [];
-  const openIssue = (link: ThreadIssueLink) =>
-    useRightPanelStore.getState().openIssue(threadRef, link);
-  const handleUnlink = (link: ThreadIssueLink) =>
-    void unlink({ environmentId, input: { threadId: threadRef.threadId, ...link } });
-  const synced = items
-    .flatMap((link) => (link.snapshot ? [link.snapshot.syncedAt] : []))
-    .toSorted()
-    .at(-1);
-  const error = refreshError.error;
-
-  if (items.length === 0) {
-    return (
-      <Empty className="scrollbar-gutter-both min-h-0 justify-center-safe overflow-y-auto">
-        <EmptyMedia variant="icon">
-          <CircleDotIcon />
-        </EmptyMedia>
-        <EmptyHeader>
-          <EmptyTitle>{thread === null ? "Loading linked issues" : "No linked issues"}</EmptyTitle>
-          <EmptyDescription>
-            {error ?? "Link the issues this thread works on to keep their state in view."}
-          </EmptyDescription>
-        </EmptyHeader>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!canLink}
-          onClick={() => openLinkThreadIssueDialog(threadRef)}
-        >
-          <PlusIcon className="size-3.5" />
-          Link issue
-        </Button>
-      </Empty>
-    );
-  }
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col p-1.5">
-          <ThreadIssueTrees
-            threadRef={threadRef}
-            links={items}
-            renderLinked={(link) => (
-              <ThreadIssueRow
-                link={link}
-                canUnlink={canUnlink}
-                onOpen={openIssue}
-                onUnlink={handleUnlink}
-              />
-            )}
-          />
-        </div>
-      </ScrollArea>
-      <footer className="flex items-center justify-between border-t border-border/60 px-2 py-1.5 text-2xs text-muted-foreground">
-        <span className="min-w-0 truncate">
-          {items.filter((link) => link.snapshot?.state.category === "open").length} open ·{" "}
-          {items.length} linked
-          {error ? ` · ${error}` : synced ? ` · synced ${formatRelativeTimeLabel(synced)}` : ""}
-        </span>
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={!canLink}
-          onClick={() => openLinkThreadIssueDialog(threadRef)}
-        >
-          <PlusIcon className="size-3.5" />
-          Link
-        </Button>
-      </footer>
-    </div>
-  );
+  const items = enabled ? (thread?.issues ?? []) : [];
+  return {
+    items,
+    loaded: thread !== null,
+    error: refreshError.error,
+    syncedAt: items
+      .flatMap((link) => (link.snapshot ? [link.snapshot.syncedAt] : []))
+      .toSorted()
+      .at(-1),
+    canLink: canUnlink,
+    canUnlink,
+    openIssue: (link) => useRightPanelStore.getState().openIssue(threadRef, link),
+    unlink: (link) =>
+      void unlinkCommand({ environmentId, input: { threadId: threadRef.threadId, ...link } }),
+  };
 }

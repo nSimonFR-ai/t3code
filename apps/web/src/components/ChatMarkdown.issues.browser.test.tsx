@@ -40,11 +40,6 @@ vi.mock("./pullRequest/PullRequestsUnavailableState", () => ({
 vi.mock("./pullRequest/PullRequestGhosts", () => ({
   PullRequestDetailGhost: () => <h2>Loading issue</h2>,
 }));
-vi.mock("./threadIssue/ThreadIssuesPanel", () => ({
-  ThreadIssuesPanel: ({ threadRef }: { threadRef: { environmentId: EnvironmentId } }) => (
-    <h2>Linked issues on {threadRef.environmentId}</h2>
-  ),
-}));
 
 const issueLinks = vi.hoisted(() => ({
   resolve: vi.fn(),
@@ -179,7 +174,7 @@ describe("pull request Markdown issue destinations", () => {
     await act(async () =>
       root.render(
         <ChatViewIssuePanel
-          surface={surface as Extract<RightPanelSurface, { kind: "issue" | "issues" }>}
+          surface={surface as Extract<RightPanelSurface, { kind: "issue" }>}
           threadRef={threadRef}
           environmentById={
             new Map([
@@ -341,19 +336,6 @@ describe("pull request Markdown issue destinations", () => {
           expect(element.querySelector("h2")?.textContent).toBe("Loading issue");
         }
       }
-    },
-  );
-
-  it.each([false, true])(
-    "keeps the linked Issues tab on A when its capability is %s",
-    async (supported) => {
-      useRightPanelStore.getState().open(threadRef, "issues");
-      const surface =
-        useRightPanelStore.getState().byThreadKey[scopedThreadKey(threadRef)]!.surfaces[0]!;
-      await showPanel(surface, supported, !supported);
-      expect(element.querySelector("h2")?.textContent).toBe(
-        supported ? "Linked issues on env-a" : "Issues unavailable",
-      );
     },
   );
 });

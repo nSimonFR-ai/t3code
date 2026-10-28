@@ -7,7 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { type ClosedViewEntry, useClosedViewStore } from "./closedViewStore";
+import { type ClosedViewEntry, persistedEntries, useClosedViewStore } from "./closedViewStore";
 
 const refA = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-A"));
 const refB = scopeThreadRef("env-2" as EnvironmentId, ThreadId.make("thread-A"));
@@ -136,7 +136,13 @@ describe("loading saved closed views", () => {
             kind: "panel-tab",
             threadRef: refA,
             // The #6315-era shape: no tracker, scope or key.
-            surface: { id: "issue:old", kind: "issue", provider: "github", repository: "a/b", number: 7 },
+            surface: {
+              id: "issue:old",
+              kind: "issue",
+              provider: "github",
+              repository: "a/b",
+              number: 7,
+            },
           },
         ],
       },
@@ -145,5 +151,28 @@ describe("loading saved closed views", () => {
     await useClosedViewStore.persist.rehydrate();
 
     expect(useClosedViewStore.getState().entries).toEqual([kept]);
+  });
+});
+
+describe("loading saved linked issues views", () => {
+  it("reopens a closed linked issues tab as the one linked items tab", () => {
+    const linkedIssues = { id: "issues", kind: "issues" };
+    expect(
+      persistedEntries({
+        entries: [
+          { id: "a", kind: "panel-tab", threadRef: refA, surface: linkedIssues },
+          {
+            id: "b",
+            kind: "panel-tab",
+            threadRef: refA,
+            surface: { id: "pull-requests", kind: "pull-requests" },
+          },
+          { id: "c", kind: "panel-tab", threadRef: refB, surface: linkedIssues },
+        ],
+      }).map((entry) => [entry.id, entry.kind === "panel-tab" ? entry.surface.id : null]),
+    ).toEqual([
+      ["a", "pull-requests"],
+      ["c", "pull-requests"],
+    ]);
   });
 });

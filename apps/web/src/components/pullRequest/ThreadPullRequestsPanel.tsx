@@ -40,6 +40,11 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { openLinkPullRequestDialog } from "./LinkPullRequestDialog";
+import { IssueGlyph } from "../issue/issuePresentation";
+import { openLinkThreadIssueDialog } from "../threadIssue/LinkThreadIssueDialog";
+import { ThreadIssueRow, useThreadIssueLinks } from "../threadIssue/ThreadIssueLinks";
+import { ThreadIssueTrees, useThreadIssueTreeModel } from "../threadIssue/ThreadIssueTrees";
+import { pullRequestsOutsideIssueTrees } from "../threadIssue/threadIssueTree.logic";
 import {
   PULL_REQUEST_ROW_CLASS,
   PULL_REQUEST_ROW_NUMBER_CLASS,
@@ -366,12 +371,53 @@ export function ThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
   if (configs.get(threadRef.environmentId) === undefined) {
     return (
       <PullRequestsUnavailableState
-        title="Linked pull requests unavailable"
-        error="This environment does not support multiple linked pull requests."
+        title="Linked items unavailable"
+        error="This environment does not support linked pull requests or issues."
       />
     );
   }
   return <EnabledThreadPullRequestsPanel threadRef={threadRef} />;
+}
+
+function LinkMenu({
+  threadRef,
+  issuesEnabled,
+  canLinkIssue,
+}: {
+  threadRef: ScopedThreadRef;
+  issuesEnabled: boolean;
+  canLinkIssue: boolean;
+}) {
+  if (!issuesEnabled) {
+    return (
+      <Button size="xs" variant="ghost" onClick={() => openLinkPullRequestDialog(threadRef)}>
+        <PlusIcon className="size-3.5" />
+        Link
+      </Button>
+    );
+  }
+  return (
+    <Menu>
+      <MenuTrigger
+        render={
+          <Button size="xs" variant="ghost">
+            <PlusIcon className="size-3.5" />
+            Link
+          </Button>
+        }
+      />
+      <MenuPopup align="end">
+        <MenuItem onClick={() => openLinkPullRequestDialog(threadRef)}>
+          <PullRequestGlyph.pullRequest className="size-3.5" />
+          Pull request
+        </MenuItem>
+        <MenuItem disabled={!canLinkIssue} onClick={() => openLinkThreadIssueDialog(threadRef)}>
+          <IssueGlyph.issue className="size-3.5" />
+          Issue
+        </MenuItem>
+      </MenuPopup>
+    </Menu>
+  );
 }
 
 function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThreadRef }) {
@@ -382,21 +428,28 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     .toSorted((left, right) =>
       left.id === thread?.projectId ? -1 : right.id === thread?.projectId ? 1 : 0,
     );
+  const capabilities = useServerConfigs().get(threadRef.environmentId)?.environment.capabilities;
+  const issuesEnabled = capabilities?.issues === true;
+  const issues = useThreadIssueLinks(threadRef, issuesEnabled);
   // Derive lines before later hooks to preserve compiler caching and avoid LegendList renders.
   const links = visibleThreadPullRequests(thread?.pullRequests ?? []);
-  const lines = pullRequestListLines(resolveThreadPullRequestChains(links));
-  const openCount = links.filter(
-    (link) => link.snapshot === null || link.snapshot.state === "open",
-  ).length;
-  const lastSynced = latestSyncedAt(links);
-  const linkCount = links.length;
+  const issueTrees = useThreadIssueTreeModel(threadRef, issues.items, links);
+  // A pull request an issue in the trees lists is drawn there, under that issue, not again below.
+  const flatLinks = pullRequestsOutsideIssueTrees(links, issueTrees.pullRequestsByRow);
+  const lines = pullRequestListLines(resolveThreadPullRequestChains(flatLinks));
+  const openCount =
+    links.filter((link) => link.snapshot === null || link.snapshot.state === "open").length +
+    issues.items.filter((link) => link.snapshot?.state.category === "open").length;
+  const lastSynced = [latestSyncedAt(links), issues.syncedAt ?? null]
+    .filter((at) => at !== null)
+    .toSorted()
+    .at(-1);
+  const linkCount = links.length + issues.items.length;
   const modifiers = useShortcutModifierState(true);
   const speedMode =
     modifiers.shiftKey && !modifiers.metaKey && !modifiers.ctrlKey && !modifiers.altKey;
-  const openLinkDialog = () => openLinkPullRequestDialog(threadRef);
   const unlink = useAtomCommand(threadEnvironment.unlinkPullRequest, { reportFailure: true });
   const watch = useAtomCommand(threadEnvironment.watchPullRequest, { reportFailure: true });
-  const capabilities = useServerConfigs().get(threadRef.environmentId)?.environment.capabilities;
   const supportsWatch = capabilities?.threadPullRequestWatch === true;
   const handleUnlink = (link: ThreadPullRequestLink) => {
     void unlink({
@@ -429,28 +482,64 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <PullRequestGlyph.link aria-hidden className="size-6 text-muted-foreground/60" />
-        <p className="text-sm font-medium">No linked pull requests</p>
-        <p className="max-w-60 text-xs text-muted-foreground">
-          Pull requests the agent opens from this thread land here. Link one yourself from a URL or
-          a number.
+        <p className="text-sm font-medium">
+          {thread === null ? "Loading linked items" : "No linked items"}
         </p>
-        <Button size="sm" variant="outline" onClick={openLinkDialog}>
-          <PlusIcon className="size-3.5" />
-          Link pull request
-        </Button>
+        <p className="max-w-60 text-xs text-muted-foreground">
+          {issues.error ??
+            (issuesEnabled
+              ? "Pull requests and issues linked to this thread appear here. Link one from a URL or a number."
+              : "Pull requests the agent opens from this thread land here. Link one yourself from a URL or a number.")}
+        </p>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => openLinkPullRequestDialog(threadRef)}>
+            <PlusIcon className="size-3.5" />
+            Link pull request
+          </Button>
+          {issuesEnabled ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!issues.canLink}
+              onClick={() => openLinkThreadIssueDialog(threadRef)}
+            >
+              <PlusIcon className="size-3.5" />
+              Link issue
+            </Button>
+          ) : null}
+        </div>
       </div>
     );
   }
+
+  const issueSection =
+    issues.items.length === 0 ? null : (
+      <div className="flex flex-col pb-1.5">
+        <ThreadIssueTrees
+          threadRef={threadRef}
+          model={issueTrees}
+          renderLinked={(link) => (
+            <ThreadIssueRow
+              link={link}
+              canUnlink={issues.canUnlink}
+              onOpen={issues.openIssue}
+              onUnlink={issues.unlink}
+            />
+          )}
+        />
+      </div>
+    );
 
   return (
     <PullRequestSpeedModeContext value={speedMode}>
       <div className="flex h-full min-h-0 flex-col">
         {/* Threads that run a stack or a sweep link hundreds of pull requests; only the rows in
-          view are mounted. */}
+          view are mounted. The linked issues' trees ride above them as the list header. */}
         <LegendList<PullRequestListLine>
           data={lines}
           keyExtractor={lineKey}
-          extraData={rowInputs}
+          extraData={{ ...rowInputs, issueTrees, issues }}
+          ListHeaderComponent={issueSection}
           renderItem={({ item: line }) => (
             <LinkRow
               line={line}
@@ -472,19 +561,22 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
           className="min-h-0 flex-1 overscroll-contain p-1.5"
         />
         <footer className="flex items-center justify-between border-t border-border/60 px-2 py-1.5 text-2xs text-muted-foreground">
-          <span>
+          <span className="min-w-0 truncate">
             {openCount} open · {linkCount} linked
-            {lastSynced ? (
+            {issues.error ? (
+              ` · ${issues.error}`
+            ) : lastSynced ? (
               <>
                 {" · synced "}
                 <RelativeTime timestamp={lastSynced} />
               </>
             ) : null}
           </span>
-          <Button size="xs" variant="ghost" onClick={openLinkDialog}>
-            <PlusIcon className="size-3.5" />
-            Link
-          </Button>
+          <LinkMenu
+            threadRef={threadRef}
+            issuesEnabled={issuesEnabled}
+            canLinkIssue={issues.canLink}
+          />
         </footer>
       </div>
     </PullRequestSpeedModeContext>

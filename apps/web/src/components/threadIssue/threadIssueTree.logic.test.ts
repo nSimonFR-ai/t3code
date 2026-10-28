@@ -5,7 +5,11 @@ import type {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildThreadIssueTrees, treePullRequestRows } from "./threadIssueTree.logic";
+import {
+  buildThreadIssueTrees,
+  pullRequestsOutsideIssueTrees,
+  treePullRequestRows,
+} from "./threadIssueTree.logic";
 
 const OPEN = { name: "Todo", category: "open" } as const;
 
@@ -127,5 +131,31 @@ describe("treePullRequestRows", () => {
       (rows.get(row) ?? []).map((pr) => `${pr.number}${pr.inThread ? "*" : ""}`),
     );
     expect(listed).toEqual([["7*"], [], ["8"]]);
+  });
+});
+
+describe("pullRequestsOutsideIssueTrees", () => {
+  it("keeps only the thread's pull requests no issue in the trees lists", () => {
+    const trees = buildThreadIssueTrees([
+      {
+        link: link("ENG-2"),
+        ancestors: [],
+        children: [],
+        pullRequests: [pullRequest(7), pullRequest(9)],
+      },
+    ]);
+    const threadPullRequests = [
+      { url: "https://github.com/acme/web/pull/7/" },
+      { url: "https://github.com/acme/web/pull/8" },
+    ];
+    const byRow = treePullRequestRows(trees, threadPullRequests);
+    expect(pullRequestsOutsideIssueTrees(threadPullRequests, byRow)).toEqual([
+      { url: "https://github.com/acme/web/pull/8" },
+    ]);
+  });
+
+  it("returns every pull request when no issue lists any of them", () => {
+    const threadPullRequests = [{ url: "https://github.com/acme/web/pull/8" }];
+    expect(pullRequestsOutsideIssueTrees(threadPullRequests, new Map())).toBe(threadPullRequests);
   });
 });
