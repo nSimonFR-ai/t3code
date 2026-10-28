@@ -635,6 +635,23 @@ describe("IssueService target resolution", () => {
     }),
   );
 
+  it.effect("reads a link saved without an account through the project's only source", () =>
+    Effect.gen(function* () {
+      const current = project({ id: "notes" });
+      const binding = { tracker: LINEAR, scope: "acme/ENG", connectionId: "Account" };
+      const service = yield* makeService({
+        projects: [current],
+        trackers: [fakeStandaloneTracker()],
+        bindings: { notes: binding },
+      });
+      const legacy = { projectId: current.id, tracker: LINEAR, scope: "acme/ENG", key: "ENG-7" };
+      expect((yield* service.detail(legacy)).writable).toBe(true);
+      expect((yield* Effect.flip(service.detail({ ...legacy, connectionId: "Other" })))._tag).toBe(
+        "IssueUnavailableError",
+      );
+    }),
+  );
+
   it.effect("keeps missing project, source and identity failures distinct", () =>
     Effect.gen(function* () {
       const current = project({ id: "web", repository: "acme/web" });

@@ -497,8 +497,13 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<SupportedProject & { readonly writable: boolean }, IssueError> =>
     listProjects({ projectId: ref.projectId, refreshRepository }).pipe(
       Effect.flatMap(({ supported }) => {
-        const own = supported.find((candidate) => candidate.tracker === ref.tracker);
-        if (own === undefined || own.connectionId !== ref.connectionId) {
+        const onTracker = supported.filter((candidate) => candidate.tracker === ref.tracker);
+        // Links saved before saved accounts existed carry no connectionId; they belong to the
+        // project's only source on that tracker.
+        const own =
+          onTracker.find((candidate) => candidate.connectionId === ref.connectionId) ??
+          (ref.connectionId === undefined && onTracker.length === 1 ? onTracker[0] : undefined);
+        if (own === undefined) {
           return Effect.fail(new IssueUnavailableError({ reason: "tracker-unsupported" }));
         }
         const host = ref.host === undefined ? own.host : issueHostKey(ref.host);

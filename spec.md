@@ -14,6 +14,7 @@ The fork carries Bil0000's Issues rewrite, pingdotgg/t3code#19576 (it replaced #
 - R1.2 Linear MUST work as a standalone tracker, with accounts and per-project team bindings under Settings → Source control.
 - R1.3 Where upstream renamed or removed an API #19576 uses, the fork MUST adapt #19576's code to upstream's current API rather than restore the old one.
 - R1.4 A Linear binding to one team MUST still read and update issues of every other team in the same workspace (a project bound to `trusk/CO` opens `TEC-399`). Writes that depend on a team (workflow states, labels, assignees) MUST use the issue's own team, not the bound one. Another workspace stays refused. Where: `requireIssueReference` and `issueScope` in `packages/issue-tracker-linear/src/server/LinearIssueTracker.ts`. Check: the cross-team tests in `LinearIssueTracker.test.ts`.
+- R1.5 An issue link or reference saved without a `connectionId` (links from before saved accounts, or fixed by hand) MUST be read through the project's only source on that tracker; with two sources on one tracker it stays refused. A reference naming another account stays refused. Where: `requireProject` in `apps/server/src/issue/IssueService.ts`. Check: "reads a link saved without an account…" in `IssueService.test.ts`.
 
 Where: merge commit on the branch, plus the follow-up port commit. Check: web, server, mobile and package typechecks are clean.
 
