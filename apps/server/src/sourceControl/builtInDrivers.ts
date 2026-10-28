@@ -1,3 +1,8 @@
+import * as AzureDevOpsIssueTrackerDriver from "@t3tools/source-control-azure-devops/server/issueTrackerDriver";
+import * as ForgejoIssueTrackerDriver from "@t3tools/source-control-forgejo/server/issueTrackerDriver";
+import * as GitCafeIssueTrackerDriver from "@t3tools/source-control-gitcafe/server/issueTrackerDriver";
+import * as GitHubIssueTrackerDriver from "@t3tools/source-control-github/server/issueTrackerDriver";
+import * as GitLabIssueTrackerDriver from "@t3tools/source-control-gitlab/server/issueTrackerDriver";
 import type {
   SourceControlDriver,
   SourceControlDriverInstance,
@@ -20,6 +25,23 @@ export class SourceControlDrivers extends Context.Service<
   SourceControlDrivers,
   ReadonlyArray<SourceControlDriverEntry>
 >()("t3/sourceControl/builtInDrivers/SourceControlDrivers") {}
+
+// Git hosts whose issue tracker shares the host's rate limit with its other readers.
+const hostIssueDrivers = [
+  { issues: GitHubIssueTrackerDriver.driver, sharedIssueLimits: false },
+  { issues: GitLabIssueTrackerDriver.driver, sharedIssueLimits: true },
+  { issues: AzureDevOpsIssueTrackerDriver.driver, sharedIssueLimits: true },
+  { issues: ForgejoIssueTrackerDriver.driver, sharedIssueLimits: true },
+  { issues: GitCafeIssueTrackerDriver.driver, sharedIssueLimits: true },
+];
+
+export const BUILT_IN_GIT_HOST_ISSUE_DRIVERS = hostIssueDrivers.map(({ issues }) => issues);
+
+export const SHARED_ISSUE_RATE_LIMIT_KINDS = new Set(
+  hostIssueDrivers.flatMap(({ issues, sharedIssueLimits }) =>
+    sharedIssueLimits ? [issues.kind] : [],
+  ),
+);
 
 const make = Effect.forEach(BUILT_IN_SOURCE_CONTROL_DRIVER_LIST, (driver) =>
   driver.make.pipe(Effect.map((instance) => ({ driver, instance }))),

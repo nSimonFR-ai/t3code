@@ -10,6 +10,34 @@
     "./server/driver": {
       "types": "./src/server/driver.ts",
       "import": "./src/server/driver.ts"
+    },
+    "./server/GitHubCredentials": {
+      "types": "./src/server/GitHubCredentials.ts",
+      "import": "./src/server/GitHubCredentials.ts"
+    },
+    "./server/gitHubIssueJson": {
+      "types": "./src/server/gitHubIssueJson.ts",
+      "import": "./src/server/gitHubIssueJson.ts"
+    },
+    "./server/GitHubIssueTracker": {
+      "types": "./src/server/GitHubIssueTracker.ts",
+      "import": "./src/server/GitHubIssueTracker.ts"
+    },
+    "./server/GitHubQuota": {
+      "types": "./src/server/GitHubQuota.ts",
+      "import": "./src/server/GitHubQuota.ts"
+    },
+    "./server/GitHubRequestPolicy": {
+      "types": "./src/server/GitHubRequestPolicy.ts",
+      "import": "./src/server/GitHubRequestPolicy.ts"
+    },
+    "./server/GitHubRest": {
+      "types": "./src/server/GitHubRest.ts",
+      "import": "./src/server/GitHubRest.ts"
+    },
+    "./server/issueTrackerDriver": {
+      "types": "./src/server/issueTrackerDriver.ts",
+      "import": "./src/server/issueTrackerDriver.ts"
     }
   },
   "scripts": {
@@ -19,6 +47,7 @@
   },
   "dependencies": {
     "@t3tools/contracts": "workspace:*",
+    "@t3tools/issue-tracker-core": "workspace:*",
     "@t3tools/provider-core": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "@t3tools/source-control-core": "workspace:*",

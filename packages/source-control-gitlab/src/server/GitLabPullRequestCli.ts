@@ -541,22 +541,7 @@ export const make = Effect.gen(function* () {
     readonly stdin?: string;
     readonly maxOutputBytes?: number;
     readonly timeoutMs?: number;
-  }) =>
-    gitlab.execute({
-      cwd: input.cwd,
-      args: [
-        "api",
-        input.path,
-        ...(input.method === undefined ? [] : ["--method", input.method]),
-        // glab --input keeps payloads out of argv/logs but omits GitLab's required Content-Type.
-        ...(input.stdin === undefined
-          ? []
-          : ["--input", "-", "--header", "Content-Type: application/json"]),
-      ],
-      ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
-      ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
-      ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
-    });
+  }) => GitLabCli.api(gitlab.execute, input);
 
   const listPage = (input: {
     readonly cwd: string;

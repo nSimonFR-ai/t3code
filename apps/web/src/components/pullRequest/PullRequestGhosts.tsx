@@ -49,9 +49,17 @@ const DEFAULT_DETAIL_TABS = [
   { value: "code", label: "Code" },
 ] as const;
 
-export function PullRequestListGhost({ rows = 7, caption }: { rows?: number; caption?: string }) {
+export function PullRequestListGhost({
+  rows = 7,
+  caption,
+  label = "Loading pull requests",
+}: {
+  rows?: number;
+  label?: string;
+  caption?: string;
+}) {
   return (
-    <div role="status" aria-label={caption ?? "Loading pull requests"} className="space-y-0.5">
+    <div role="status" aria-label={caption ?? label} className="space-y-0.5">
       {/* Outside the pulse so the explanation stays readable. */}
       {caption ? (
         <p className="px-3 pb-1 text-xs font-medium text-muted-foreground">{caption}</p>

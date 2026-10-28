@@ -1,11 +1,13 @@
 import {
   EnvironmentId,
+  IssueTrackerKind,
   ProjectId,
   RunId,
   RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadShell,
+  type ThreadIssueLink,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
@@ -438,6 +440,109 @@ describe("v2 thread shell lists", () => {
       expect(harness.registry.get(listAtom)).toEqual([]);
     } finally {
       disposeList();
+      harness.registry.dispose();
+    }
+  });
+
+  it("quiet issue subscriptions skip streaming ticks and track links across accounts and environments", () => {
+    const harness = makeHarness([environmentId, remoteEnvironmentId]);
+    const link: ThreadIssueLink = {
+      tracker: IssueTrackerKind.make("github"),
+      host: "github.com",
+      scope: "owner/repo",
+      key: "7",
+      connectionId: "Account/A",
+      projectId: v2ThreadShell.projectId,
+      url: "https://github.com/owner/repo/issues/7",
+      source: "manual",
+      linkedAt: "2026-10-19T00:00:00Z",
+      snapshot: {
+        displayKey: "#7",
+        title: "Saved issue",
+        state: { category: "open", name: "open" },
+        syncedAt: "2026-10-19T00:00:00Z",
+      },
+    };
+    const runId = RunId.make("issue-streaming-run");
+    const running: OrchestrationV2ThreadShell = {
+      ...v2ThreadShell,
+      latestRunId: runId,
+      activeRunId: runId,
+      status: "running",
+      itemCount: 1,
+      visibleItemCount: 1,
+      issues: [link],
+    };
+    let sequence = 0;
+    const setThread = (thread: OrchestrationV2ThreadShell, target = environmentId) =>
+      harness.registry.set(
+        harness.snapshotAtom(target),
+        applyShellStreamEvent(harness.registry.get(harness.snapshotAtom(target))!, {
+          kind: "thread.updated",
+          location: "active",
+          sequence: ++sequence,
+          thread,
+        }),
+      );
+    setThread(running);
+    setThread(running, remoteEnvironmentId);
+    const ref = { environmentId, threadId: running.id };
+    const quiet = harness.threads.quietThreadShellAtom(ref);
+    const full = harness.threads.threadShellAtom(ref);
+    const remote = harness.threads.quietThreadShellAtom({
+      ...ref,
+      environmentId: remoteEnvironmentId,
+    });
+    const first = harness.registry.get(quiet);
+    harness.registry.get(full);
+    harness.registry.get(remote);
+    const counts = { full: 0, quiet: 0, remote: 0 };
+    const stops = [
+      harness.registry.subscribe(full, () => counts.full++),
+      harness.registry.subscribe(quiet, () => counts.quiet++),
+      harness.registry.subscribe(remote, () => counts.remote++),
+    ];
+    try {
+      for (let tick = 1; tick <= 20; tick++) {
+        setThread({
+          ...running,
+          updatedAt: DateTime.add(v2Now, { seconds: tick }),
+          itemCount: tick + 1,
+          visibleItemCount: tick + 1,
+        });
+        expect(harness.registry.get(quiet)).toBe(first);
+      }
+      expect(counts).toEqual({ full: 20, quiet: 0, remote: 0 });
+
+      const updated = {
+        ...link,
+        snapshot: {
+          ...link.snapshot!,
+          title: "Changed issue",
+          state: { category: "closed" as const, name: "closed" },
+        },
+      };
+      setThread({ ...running, issues: [updated] });
+      expect(harness.registry.get(quiet)?.issues?.[0]?.snapshot).toEqual(updated.snapshot);
+      expect(counts.quiet).toBe(1);
+
+      const account = { ...updated, connectionId: "Account/B" };
+      setThread({ ...running, issues: [account] });
+      expect(harness.registry.get(quiet)?.issues?.[0]?.connectionId).toBe("Account/B");
+      expect(counts.quiet).toBe(2);
+
+      for (const issues of [[account, link], [link], []]) {
+        setThread({ ...running, issues });
+        expect(harness.registry.get(quiet)?.issues).toEqual(issues);
+      }
+      expect(counts).toEqual({ full: 25, quiet: 5, remote: 0 });
+      expect(harness.registry.get(remote)?.issues).toEqual([link]);
+      setThread({ ...running, issues: [account] }, remoteEnvironmentId);
+      expect(harness.registry.get(remote)?.issues).toEqual([account]);
+      expect(harness.registry.get(quiet)?.issues).toEqual([]);
+      expect(counts).toEqual({ full: 25, quiet: 5, remote: 1 });
+    } finally {
+      for (const stop of stops) stop();
       harness.registry.dispose();
     }
   });

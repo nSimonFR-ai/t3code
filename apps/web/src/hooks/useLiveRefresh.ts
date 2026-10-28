@@ -6,7 +6,7 @@ const LIVE_REFRESH_INTERVAL_MS = 5 * 60_000;
 
 const LIVE_REFRESH_IDLE_AFTER_MS = 6 * 60_000;
 
-function shouldLiveRefresh(input: {
+export function shouldLiveRefresh(input: {
   readonly visible: boolean;
   readonly now: number;
   readonly lastRefreshedAt: number;

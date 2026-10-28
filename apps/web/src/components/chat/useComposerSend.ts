@@ -94,6 +94,7 @@ import {
 } from "./composerSend.logic";
 import { usePlanFollowUpSend } from "./useProposedPlanSend";
 import { useMultipleModelSend } from "./useMultipleModelSend";
+import { withIssueThreadHandoff } from "../issue/useIssueThreadHandoff";
 import { type ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import {
   awaitAttachmentUploads,
@@ -774,6 +775,14 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       return;
     }
+    const pendingIssueDraft = useComposerDraftStore
+      .getState()
+      .getComposerDraft(composerDraftTarget);
+    const pendingIssueUrl = pendingIssueDraft?.pendingIssueUrl;
+    const pendingIssueContext = {
+      pendingIssueEnvironmentId: pendingIssueDraft?.pendingIssueEnvironmentId,
+      pendingIssueConnectionId: pendingIssueDraft?.pendingIssueConnectionId,
+    };
     const threadIdForSend = activeThread.id;
     const sendSnapshot = snapshotComposerSend({
       prompt: promptForSend,
@@ -1121,6 +1130,8 @@ export function useComposerSend(input: ComposerSendInput) {
         readFileBlockReason: () => readLiveAttachmentCapabilities().fileBlockReason,
         buildOutgoingMessageContext,
         isCurrentSend: () => composerSendGenerationRef.current === sendGeneration,
+        pendingIssueUrl,
+        pendingIssueContext,
       });
       return;
     }
@@ -1324,7 +1335,14 @@ export function useComposerSend(input: ComposerSendInput) {
           );
         }
       }
-      const startResult = await startPromise;
+      const startResult = await withIssueThreadHandoff(
+        startPromise,
+        composerDraftTarget,
+        scopeThreadRef(environmentId, threadIdForSend),
+        activeProject.id,
+        pendingIssueUrl,
+        pendingIssueContext,
+      );
       if (startResult._tag === "Failure") {
         failure = startResult;
       } else {
@@ -1385,6 +1403,8 @@ export function useComposerSend(input: ComposerSendInput) {
       if (
         !composerDraftHasUserContent(
           useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
+          pendingIssueUrl,
+          pendingIssueContext,
         )
       ) {
         setOptimisticUserMessages((existing) => {

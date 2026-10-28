@@ -1,3 +1,4 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
 import type {
   EnvironmentId,
@@ -98,11 +99,15 @@ export function PullRequestSearchInput({
   busy,
   onChange,
   onSubmit,
+  placeholder = "Search pull requests, or label:bug",
+  "aria-label": ariaLabel = "Search pull requests",
 }: {
   value: string;
   busy?: boolean;
   onChange: (value: string) => void;
-  onSubmit: (value: string) => void;
+  onSubmit?: (value: string) => void;
+  placeholder?: string;
+  "aria-label"?: string;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   return (
@@ -119,18 +124,42 @@ export function PullRequestSearchInput({
           setDraft(event.currentTarget.value);
           onChange(event.currentTarget.value);
           if ((event.nativeEvent as InputEvent).inputType === "insertFromPaste") {
-            onSubmit(event.currentTarget.value);
+            onSubmit?.(event.currentTarget.value);
           }
         }}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-            onSubmit(event.currentTarget.value);
+            onSubmit?.(event.currentTarget.value);
           }
         }}
-        placeholder="Search pull requests, or label:bug"
-        aria-label="Search pull requests"
+        placeholder={placeholder}
+        aria-label={ariaLabel}
       />
     </InputGroup>
+  );
+}
+
+export function PullRequestRefreshControl({
+  compact = false,
+  refreshing,
+  onRefresh,
+  "aria-label": ariaLabel = "Refresh pull requests",
+}: {
+  compact?: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+  "aria-label"?: string;
+}) {
+  return (
+    <Button
+      size={compact ? "icon-sm" : "icon"}
+      variant={compact ? "ghost" : "outline"}
+      aria-label={ariaLabel}
+      onClick={onRefresh}
+      disabled={refreshing}
+    >
+      <RefreshIcon size="md" refreshing={refreshing} />
+    </Button>
   );
 }
 
@@ -164,7 +193,7 @@ const CHECKS_OPTIONS = [
   { value: "failing", label: "Failing", Icon: CircleXIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
 
-function PullRequestFilterRadioGroup<Value extends string>({
+export function PullRequestFilterRadioGroup<Value extends string>({
   label,
   value,
   options,

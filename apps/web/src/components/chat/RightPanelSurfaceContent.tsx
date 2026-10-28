@@ -18,9 +18,8 @@ import {
   type PersistentThreadTerminalPanelProps,
 } from "../PersistentThreadTerminals";
 import { pullRequestPanelContext } from "../pullRequest/pullRequestDetail.logic";
-import { PullRequestDetailPanel } from "../pullRequest/PullRequestDetailPanel";
-import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
-import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
+import { ChatViewPullRequestPanel } from "../ChatViewPullRequestPanel";
+import type { EnvironmentPresentation } from "../../state/environments";
 import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel";
 
 const PreviewPanel = lazy(() =>
@@ -38,8 +37,6 @@ type RightPanelTerminalProps = Omit<
 >;
 
 interface RightPanelPullRequestProps {
-  readonly capabilityKnown: boolean;
-  readonly supported: boolean;
   readonly projectId: ProjectId | null;
   readonly pullRequests: ReadonlyArray<ThreadPullRequestLink>;
   readonly linkedPullRequest: ThreadLinkedPullRequest | null;
@@ -61,6 +58,10 @@ export function RightPanelSurfaceContent(props: {
   readonly activeSurfaceId: string | null;
   readonly threadRef: ScopedThreadRef;
   readonly environmentId: EnvironmentId;
+  readonly environmentById: ReadonlyMap<
+    EnvironmentId,
+    Pick<EnvironmentPresentation, "serverConfig">
+  >;
   readonly visible: boolean;
   readonly composerDraftTarget: ScopedThreadRef | DraftId;
   readonly keybindings: ResolvedKeybindingsConfig;
@@ -115,27 +116,24 @@ export function RightPanelSurfaceContent(props: {
       );
     case "pull-request": {
       const pullRequest = props.pullRequest;
-      if (!pullRequest.capabilityKnown) return <PullRequestDetailGhost />;
-      if (!pullRequest.supported) {
-        return (
-          <PullRequestsUnavailableState
-            title="Pull requests unavailable"
-            error="Update this environment's T3 Code server to browse pull requests."
-          />
-        );
-      }
       return (
-        <PullRequestDetailPanel
+        <ChatViewPullRequestPanel
+          environmentById={props.environmentById}
           getShortcutContext={props.getShortcutContext}
           shortcutsEnabled={visible && props.activeSurfaceId === surface.id}
           key={`${scopedThreadKey(threadRef)}:${surface.id}`}
-          environmentId={props.environmentId}
+          environmentId={
+            (surface.environmentId as EnvironmentId | undefined) ?? props.environmentId
+          }
           onSelectPullRequest={(reference) => {
             useRightPanelStore.getState().openPullRequest(threadRef, {
               projectId: reference.projectId,
               repository: reference.repository,
               number: reference.number,
               ...(reference.host ? { host: reference.host } : {}),
+              ...(surface.environmentId === undefined
+                ? {}
+                : { environmentId: surface.environmentId }),
             });
           }}
           threadRef={threadRef}

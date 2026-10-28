@@ -3,6 +3,7 @@ import {
   type OrchestrationV2Run,
   OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
+  OrchestrationV2ProviderThreadJson,
   OrchestrationV2StoredEvent,
   ProviderThreadId,
   RunAttemptId,
@@ -199,6 +200,10 @@ export interface EventSinkV2Shape {
 export class EventSinkV2 extends Context.Service<EventSinkV2, EventSinkV2Shape>()(
   "t3/orchestration-v2/EventSink/EventSinkV2",
 ) {}
+
+const decodeProviderThreadPayload = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(OrchestrationV2ProviderThreadJson),
+);
 
 const layerBase: Layer.Layer<
   EventSinkV2,
@@ -406,6 +411,48 @@ const layerBase: Layer.Layer<
         }),
       );
     });
+    const appendAndApplyEvents = Effect.fn("orchestrationV2.EventSink.appendAndApplyEvents")(
+      function* (input: Parameters<EventStore.EventStoreV2Shape["append"]>[0]) {
+        const storedEvents: Array<OrchestrationV2StoredEvent> = [];
+        const outcomes: Array<RunOutcome> = [];
+        const appendBatch = Effect.fnUntraced(function* (
+          events: ReadonlyArray<OrchestrationV2DomainEvent>,
+        ) {
+          const stored = yield* eventStore.append({ ...input, events });
+          storedEvents.push(...stored);
+          outcomes.push(...(yield* applyStoredEvents(stored)));
+        });
+        // An issue sync rebuilds its thread payload from the projection, so the events before it
+        // in the batch must already be applied.
+        let pending: Array<OrchestrationV2DomainEvent> = [];
+        for (const event of input.events) {
+          if (event.type !== "thread.issue-synced") {
+            pending.push(event);
+            continue;
+          }
+          if (pending.length > 0) {
+            yield* appendBatch(pending);
+            pending = [];
+          }
+          const thread = yield* projectionStore.getThread(event.threadId);
+          pending.push({
+            ...event,
+            providerInstanceId: thread.providerInstanceId,
+            payload: {
+              ...thread,
+              issues: event.payload.issues,
+              updatedAt:
+                event.issueOperation === "sync" ||
+                DateTime.isGreaterThan(thread.updatedAt, event.payload.updatedAt)
+                  ? thread.updatedAt
+                  : event.payload.updatedAt,
+            },
+          });
+        }
+        if (pending.length > 0 || storedEvents.length === 0) yield* appendBatch(pending);
+        return { storedEvents, outcomes };
+      },
+    );
 
     const writeEffect = Effect.fn("orchestrationV2.EventSink.write")(function* (
       input: Parameters<EventSinkV2Shape["writeWithEffects"]>[0],
@@ -442,11 +489,10 @@ const layerBase: Layer.Layer<
               ? yield* guardUserInputCancellations(events)
               : events,
           );
-          const committed = yield* eventStore.append({
+          const { storedEvents: committed, outcomes } = yield* appendAndApplyEvents({
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
           });
-          const outcomes = yield* applyStoredEvents(committed);
           yield* effectOutbox.enqueue(input.effects);
           return { committed, outcomes };
         }).pipe(Effect.withTracerEnabled(false)),
@@ -501,11 +547,10 @@ const layerBase: Layer.Layer<
                 ? yield* guardUserInputCancellations(input.events)
                 : input.events,
             );
-            const storedEvents = yield* eventStore.append({
+            const { storedEvents, outcomes } = yield* appendAndApplyEvents({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
               events: normalized,
             });
-            const outcomes = yield* applyStoredEvents(storedEvents);
             yield* effectOutbox.enqueue(input.effects ?? []);
             return { committed: true as const, storedEvents, outcomes };
           }),
@@ -566,11 +611,10 @@ const layerBase: Layer.Layer<
               ? yield* guardUserInputCancellations(input.events)
               : input.events,
           );
-          const storedEvents = yield* eventStore.append({
+          const { storedEvents, outcomes } = yield* appendAndApplyEvents({
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
           });
-          const outcomes = yield* applyStoredEvents(storedEvents);
           return { committed: true as const, storedEvents, outcomes };
         }),
         (result) =>
@@ -597,7 +641,14 @@ const layerBase: Layer.Layer<
             WHERE provider_thread_id = ${input.expected.id}
             LIMIT 1
           `;
-          if (rows[0]?.payload_json !== expectedJson) {
+          const currentJson = rows[0]?.payload_json;
+          const canonicalJson =
+            currentJson === undefined
+              ? undefined
+              : yield* decodeProviderThreadPayload(currentJson).pipe(
+                  Effect.flatMap(ProjectionStore.encodeProviderThreadPayload),
+                );
+          if (canonicalJson !== expectedJson) {
             return {
               committed: false as const,
               storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
@@ -605,8 +656,7 @@ const layerBase: Layer.Layer<
           }
 
           const normalized = yield* normalizeEvents(input.events);
-          const storedEvents = yield* eventStore.append({ events: normalized });
-          const outcomes = yield* applyStoredEvents(storedEvents);
+          const { storedEvents, outcomes } = yield* appendAndApplyEvents({ events: normalized });
           return { committed: true as const, storedEvents, outcomes };
         }),
         (result) =>
@@ -657,7 +707,7 @@ const layerBase: Layer.Layer<
               ? input.events
               : yield* updateDelegatedCompletionOnly(input.events, (id) => id === runId),
           );
-          const storedEvents = yield* eventStore.append({
+          const { storedEvents, outcomes } = yield* appendAndApplyEvents({
             commandId: input.commandId,
             events: normalized,
           });
@@ -672,7 +722,6 @@ const layerBase: Layer.Layer<
               new Error(`Command ${input.commandId} produced no orchestration events.`),
             );
           }
-          const outcomes = yield* applyStoredEvents(storedEvents);
           yield* effectOutbox.enqueue(input.effects);
           const receipt: CommandReceiptStore.CommandReceiptV2 = {
             commandId: input.commandId,

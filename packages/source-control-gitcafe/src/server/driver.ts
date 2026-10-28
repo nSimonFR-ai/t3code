@@ -12,7 +12,7 @@ import * as GitCafeCredentials from "./GitCafeCredentials.ts";
 import * as GitCafePullRequestProvider from "./GitCafePullRequestProvider.ts";
 import * as GitCafeSourceControlProvider from "./GitCafeSourceControlProvider.ts";
 
-const services = GitCafeApi.layer.pipe(Layer.provideMerge(GitCafeCredentials.layer));
+export const services = GitCafeApi.layer.pipe(Layer.provideMerge(GitCafeCredentials.layer));
 
 const makeInstance = Effect.all({
   sourceControl: GitCafeSourceControlProvider.make,

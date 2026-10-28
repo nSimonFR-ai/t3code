@@ -8,12 +8,15 @@ import { useToolbarLayout } from "../../components/ui/useToolbarLayout";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { WorkspaceListToolbarRow } from "../workspace/WorkspaceListToolbarRow";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { WORKSPACE_SEARCH_LABELS } from "../workspace/workspace-tabs-state";
 import type { PullRequestFilterMenu } from "./PullRequestListFilters";
 import { openSettings } from "../settings/settings-navigation";
 
-/** PR search shares the thread list's Android header row. */
+/** PR and issue search share the thread list's Android header row. */
 export function PullRequestToolbar(props: {
   readonly filters: PullRequestFilterMenu | null;
+  /** The list this row searches; defaults to pull requests. */
+  readonly tab?: "pullRequests" | "issues";
   readonly onRequestVisibility?: () => void;
 }) {
   const navigation = useNavigation();
@@ -21,41 +24,38 @@ export function PullRequestToolbar(props: {
   const workspace = useWorkspaceTabs()!;
   const { dispatch, getScrollOffset, recordScrollOffset, isTabActive } = workspace;
   const { onRequestVisibility } = props;
-  const tab = workspace.state.tabs.pullRequests;
+  const tabId = props.tab ?? "pullRequests";
+  const searchLabel = WORKSPACE_SEARCH_LABELS[tabId];
+  const tab = workspace.state.tabs[tabId];
   const input = useRef<TextInputInstance>(null);
   const searching = tab.searchMode !== "resting";
   const openSearch = () => {
     onRequestVisibility?.();
-    dispatch({
-      type: "scroll",
-      tab: "pullRequests",
-      offset: getScrollOffset("pullRequests"),
-    });
-    dispatch({ type: "search", tab: "pullRequests" });
+    dispatch({ type: "scroll", tab: tabId, offset: getScrollOffset(tabId) });
+    dispatch({ type: "search", tab: tabId });
     input.current?.focus();
     return true;
   };
   useHardwareKeyboardCommand("focusSearch", openSearch);
   const closeSearch = () => {
     Keyboard.dismiss();
-    recordScrollOffset("pullRequests", tab.searchEntryOffset);
-    dispatch({ type: "cancel", tab: "pullRequests" });
+    recordScrollOffset(tabId, tab.searchEntryOffset);
+    dispatch({ type: "cancel", tab: tabId });
   };
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to BackHandler while searching to close the PR search on Android back
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to BackHandler while searching to close the list search on Android back
   useEffect(() => {
     if (!searching) return;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       // Frozen Home screens stay mounted under a detail route or another tab,
-      // so back only applies while the PR list is in front.
+      // so back only applies while this list is in front.
       const state = navigation.getState();
-      if (!state || state.routes[state.index]?.name !== "Home" || !isTabActive("pullRequests"))
-        return false;
+      if (!state || state.routes[state.index]?.name !== "Home" || !isTabActive(tabId)) return false;
       if (Keyboard.isVisible()) Keyboard.dismiss();
       else closeSearch();
       return true;
     });
     return () => subscription.remove();
-  }, [searching, closeSearch, navigation, isTabActive]);
+  }, [searching, closeSearch, navigation, isTabActive, tabId]);
   const { paddingTop, paddingBottom } = useToolbarLayout();
   return (
     <View className="bg-header px-2" style={{ paddingTop, paddingBottom }}>
@@ -64,17 +64,17 @@ export function PullRequestToolbar(props: {
         searchField={
           <SearchField
             inputRef={input}
-            accessibilityLabel="Search pull requests"
+            accessibilityLabel={searchLabel}
             clearAccessibilityLabel="Clear search"
-            placeholder="Search pull requests"
+            placeholder={searchLabel}
             value={tab.query}
-            onChangeText={(query) => dispatch({ type: "query", tab: "pullRequests", query })}
+            onChangeText={(query) => dispatch({ type: "query", tab: tabId, query })}
           />
         }
         onCloseSearch={closeSearch}
         onOpenSearch={openSearch}
-        searchAccessibilityLabel="Search pull requests"
-        titleAccessibilityLabel="T3 Code, Pull requests"
+        searchAccessibilityLabel={searchLabel}
+        titleAccessibilityLabel={`T3 Code, ${tabId === "issues" ? "Issues" : "Pull requests"}`}
         onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
         filter={
           filters ? (

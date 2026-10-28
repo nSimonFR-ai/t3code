@@ -9,6 +9,7 @@ import { FLOATING_TABS, floatingTabsMetrics } from "./floating-workspace-tabs";
 import { View } from "react-native";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { PullRequestsScreen } from "../pull-requests/PullRequestsScreen";
+import { IssuesScreen } from "../issues/IssuesScreen";
 import { PullRequestToolbar } from "../pull-requests/PullRequestToolbar.android";
 import { WorkspaceTabsContext, useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { WorkspaceTabPanes } from "./WorkspaceTabPanes";
@@ -17,6 +18,7 @@ export function AndroidWorkspaceSidebar(props: {
   readonly children: ReactNode;
   readonly onRequestVisibility: () => void;
   readonly selectedPullRequestKey: string | null;
+  readonly selectedIssueKey: string | null;
 }) {
   const floatingTabsEnabled = useAndroidFloatingTabs();
   const workspace = useWorkspaceTabs()!;
@@ -36,6 +38,19 @@ export function AndroidWorkspaceSidebar(props: {
       renderTab={(tab) =>
         tab === "threads" ? (
           props.children
+        ) : tab === "issues" ? (
+          <WorkspaceTabsContext value={context}>
+            <View className="flex-1 bg-header">
+              <PullRequestToolbar
+                tab="issues"
+                filters={null}
+                onRequestVisibility={props.onRequestVisibility}
+              />
+              <ScreenContent insetHorizontal>
+                <IssuesScreen sidebar selectedIssueKey={props.selectedIssueKey} />
+              </ScreenContent>
+            </View>
+          </WorkspaceTabsContext>
         ) : tab !== "pullRequests" ? (
           <View className="flex-1 bg-screen" />
         ) : (

@@ -51,6 +51,11 @@ import { AttachmentFileScreen } from "./features/files/AttachmentFileScreen";
 import { ThreadFilesTreeScreen, ThreadFileScreen } from "./features/files/ThreadFilesRouteScreen";
 import { AdaptiveWorkspaceLayout } from "./features/layout/AdaptiveWorkspaceLayout";
 import { selectedPullRequestKey } from "./features/pull-requests/pullRequestSelection";
+import { selectedIssueKey } from "./features/issues/issueSelection";
+import { IssueRouteScreen } from "./features/issues/IssueRouteScreen";
+import { IssueComposeSheet } from "./features/issues/IssueComposeSheet";
+import { IssueCreateSheet } from "./features/issues/IssueCreateSheet";
+import { IssueCandidatesScreen } from "./features/issues/IssueCandidatesScreen";
 import {
   HardwareKeyboardCommandOverlay,
   HardwareKeyboardCommandProvider,
@@ -538,6 +543,7 @@ function RootStackLayout(props: {
                 workspaceRouteName={workspaceLocation.routeName}
                 workspaceRouteKeys={workspaceLocation.routeKeys}
                 selectedPullRequestKey={selectedPullRequestKey(props.state)}
+                selectedIssueKey={selectedIssueKey(props.state)}
               >
                 {props.children}
                 <HardwareKeyboardCommandOverlay />
@@ -630,6 +636,39 @@ const RootStackConfig = createWorkspaceStackNavigator({
         parse: { number: Number },
       },
       options: { ...DETAIL_HEADER_OPTIONS, ...FIXED_DUO_HEADER },
+    }),
+    Issue: createNativeStackScreen({
+      screen: IssueRouteScreen,
+      linking: "issues/:environmentId/:projectId/:tracker/:host/:scope/:key",
+      options: { ...DETAIL_HEADER_OPTIONS, ...FIXED_DUO_HEADER },
+    }),
+    IssueCompose: createNativeStackScreen({
+      screen: IssueComposeSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        sheetAllowedDetents: [0.75, 0.92],
+        sheetGrabberVisible: true,
+        headerShown: false,
+      },
+    }),
+    IssueCreate: createNativeStackScreen({
+      screen: IssueCreateSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        sheetAllowedDetents: [0.92],
+        sheetGrabberVisible: true,
+        headerShown: false,
+      },
+    }),
+    IssueCandidates: createNativeStackScreen({
+      screen: IssueCandidatesScreen,
+      options: {
+        ...DETAIL_HEADER_OPTIONS,
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        sheetAllowedDetents: [0.75, 0.92],
+        sheetGrabberVisible: true,
+        headerBackVisible: false,
+      },
     }),
     PullRequestGuideStop: createNativeStackScreen({
       screen: PullRequestGuideStopScreen,

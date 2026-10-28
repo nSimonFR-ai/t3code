@@ -36,7 +36,7 @@ export function PullRequestCompactFilterMenu<Value extends string>({
   return (
     <Menu>
       <MenuTrigger
-        aria-label={triggerLabel || iconOnly ? `${label}: ${current.label}` : label}
+        aria-label={triggerLabel || iconOnly || outlined ? `${label}: ${current.label}` : label}
         title={iconOnly ? `${label}: ${current.label}` : undefined}
         render={
           outlined ? (
@@ -53,6 +53,11 @@ export function PullRequestCompactFilterMenu<Value extends string>({
           <>
             {triggerIcon}
             <span>{triggerLabel}</span>
+          </>
+        ) : outlined ? (
+          <>
+            <PullRequestFilterOptionIcon option={current} />
+            <span className="truncate">{current.label}</span>
           </>
         ) : (
           <>

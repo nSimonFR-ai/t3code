@@ -177,8 +177,13 @@ export function gitHubReactionContent(
   return GITHUB_REACTION_BY_CONTENT[content];
 }
 
-/** Keep the viewer in counts, not actors, to avoid duplicating 'You'. */
-function toReactions(
+/**
+ * The groups GitHub answered with, as the contract carries them. A group with nobody behind it is
+ * dropped: GitHub answers with a group per content it knows, including the ones nobody chose. The
+ * viewer's own login is left out of `actors` — the page names them "You" instead, and leaving it
+ * in would name them twice — but `count` still counts them along with everyone else.
+ */
+export function toReactions(
   groups: ReadonlyArray<ReactionGroup> | null | undefined,
   viewer: string | null,
 ): ReadonlyArray<PullRequestReaction> {

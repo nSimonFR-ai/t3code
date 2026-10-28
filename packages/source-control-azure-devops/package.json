@@ -10,6 +10,18 @@
     "./server/driver": {
       "types": "./src/server/driver.ts",
       "import": "./src/server/driver.ts"
+    },
+    "./server/AzureDevOpsCli": {
+      "types": "./src/server/AzureDevOpsCli.ts",
+      "import": "./src/server/AzureDevOpsCli.ts"
+    },
+    "./server/AzureDevOpsIssueTracker": {
+      "types": "./src/server/AzureDevOpsIssueTracker.ts",
+      "import": "./src/server/AzureDevOpsIssueTracker.ts"
+    },
+    "./server/issueTrackerDriver": {
+      "types": "./src/server/issueTrackerDriver.ts",
+      "import": "./src/server/issueTrackerDriver.ts"
     }
   },
   "scripts": {
@@ -18,6 +30,7 @@
   },
   "dependencies": {
     "@t3tools/contracts": "workspace:*",
+    "@t3tools/issue-tracker-core": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "@t3tools/source-control-core": "workspace:*",
     "diff": "8.0.3",

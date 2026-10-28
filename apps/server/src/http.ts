@@ -32,6 +32,8 @@ import { OtlpTracer, OtlpSerialization } from "effect/observability";
 import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveAsset } from "./assets/AssetAccess.ts";
 import { sourceControlMediaResponse } from "./assets/sourceControlMediaResponse.ts";
+import { linearMediaResponse } from "./assets/LinearMediaFetch.ts";
+import * as IssueService from "./issue/IssueService.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
 import {
   ATTACHMENT_UPLOAD_ROUTE_PREFIX,
@@ -394,60 +396,83 @@ const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((
 
 export const withUntracedRequests = Layer.provide(layerUntracedRequests);
 
-export const layerAssetRoute = HttpRouter.add(
-  "GET",
-  `${ASSET_ROUTE_PREFIX}/*`,
+export const layerAssetRoute = Layer.unwrap(
   Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
-    if (Option.isNone(url)) {
-      return HttpServerResponse.text("Bad Request", { status: 400 });
-    }
+    const issues = yield* IssueService.IssueService;
+    return HttpRouter.add(
+      "GET",
+      `${ASSET_ROUTE_PREFIX}/*`,
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const url = HttpServerRequest.toURL(request);
+        if (Option.isNone(url)) {
+          return HttpServerResponse.text("Bad Request", { status: 400 });
+        }
 
-    const suffix = url.value.pathname.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-    const separatorIndex = suffix.indexOf("/");
-    if (separatorIndex <= 0) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
+        const suffix = url.value.pathname.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const separatorIndex = suffix.indexOf("/");
+        if (separatorIndex <= 0) {
+          return HttpServerResponse.text("Not Found", { status: 404 });
+        }
 
-    const asset = yield* resolveAsset(
-      suffix.slice(0, separatorIndex),
-      suffix.slice(separatorIndex + 1),
-    );
-    if (!asset) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-    if (asset.kind === "bytes") {
-      return HttpServerResponse.uint8Array(asset.bytes, {
-        contentType: asset.mimeType,
-        headers: { "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" },
-      });
-    }
-    if (asset.kind === "source-control-media") {
-      return yield* sourceControlMediaResponse(asset, request.headers).pipe(
-        Effect.tapError((cause) =>
-          // The URL can carry a token in its query string, and the error keeps the request it
-          // failed on; the host and the failure kind are enough to diagnose.
-          Effect.logWarning("Failed to fetch source control media.", {
-            host: URL.canParse(asset.url) ? new URL(asset.url).host : undefined,
-            reason: cause.reason._tag,
-          }),
-        ),
-        Effect.orElseSucceed(() =>
-          HttpServerResponse.empty({
-            status: 502,
-            headers: { "cache-control": "private, no-store", "x-content-type-options": "nosniff" },
-          }),
-        ),
-      );
-    }
-    return yield* assetFileResponse(
-      asset,
-      request.method === "GET" ? request.headers.range : undefined,
-      request.headers["if-range"],
-      request.method === "HEAD" ? "HEAD" : "GET",
-    ).pipe(
-      Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
+        const asset = yield* resolveAsset(
+          suffix.slice(0, separatorIndex),
+          suffix.slice(separatorIndex + 1),
+        );
+        if (!asset) {
+          return HttpServerResponse.text("Not Found", { status: 404 });
+        }
+        if (asset.kind === "bytes") {
+          return HttpServerResponse.uint8Array(asset.bytes, {
+            contentType: asset.mimeType,
+            headers: {
+              "cache-control": "private, max-age=3600",
+              "x-content-type-options": "nosniff",
+            },
+          });
+        }
+        if (asset.kind === "linear-media") {
+          return yield* linearMediaResponse(asset, request.headers).pipe(
+            Effect.orElseSucceed(() =>
+              HttpServerResponse.empty({
+                status: 502,
+                headers: {
+                  "cache-control": "private, no-store",
+                  "x-content-type-options": "nosniff",
+                },
+              }),
+            ),
+          );
+        }
+        if (asset.kind === "source-control-media") {
+          return yield* sourceControlMediaResponse(asset, request.headers).pipe(
+            Effect.tapError((cause) =>
+              // The URL can carry a token in its query string, and the error keeps the request it
+              // failed on; the host and the failure kind are enough to diagnose.
+              Effect.logWarning("Failed to fetch source control media.", {
+                host: URL.canParse(asset.url) ? new URL(asset.url).host : undefined,
+                reason: cause.reason._tag,
+              }),
+            ),
+            Effect.orElseSucceed(() =>
+              HttpServerResponse.empty({
+                status: 502,
+                headers: { "cache-control": "private, no-store", "x-content-type-options": "nosniff" },
+              }),
+            ),
+          );
+        }
+        return yield* assetFileResponse(
+          asset,
+          request.method === "GET" ? request.headers.range : undefined,
+          request.headers["if-range"],
+          request.method === "HEAD" ? "HEAD" : "GET",
+        ).pipe(
+          Effect.orElseSucceed(() =>
+            HttpServerResponse.text("Internal Server Error", { status: 500 }),
+          ),
+        );
+      }).pipe(Effect.provideService(IssueService.IssueService, issues)),
     );
   }),
 );

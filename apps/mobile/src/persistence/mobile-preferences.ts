@@ -7,6 +7,9 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import {
   EnvironmentId,
+  IssueInvolvement,
+  IssueTrackerKind,
+  IssueListState,
   PullRequestInvolvement,
   PullRequestListFilters,
   PullRequestListState,
@@ -77,6 +80,19 @@ const WorkspaceSelections = Schema.Struct({
 });
 export type WorkspaceSelections = typeof WorkspaceSelections.Type;
 
+const IssueListFilters = Schema.Struct({
+  environmentId: Schema.NullOr(Schema.String),
+  state: IssueListState,
+  involvement: IssueInvolvement,
+  host: Schema.optional(Schema.String),
+  tracker: Schema.optional(IssueTrackerKind),
+  connectionId: Schema.optional(Schema.String),
+  accountEnvironmentId: Schema.optional(Schema.String),
+  projectId: Schema.optional(Schema.String),
+  projectEnvironmentId: Schema.optional(Schema.String),
+});
+export type IssueListFilters = typeof IssueListFilters.Type;
+
 const isThreadListFilters = Schema.is(ThreadListFilters);
 const isWorkspaceSelections = Schema.is(WorkspaceSelections);
 const isPullRequestListPreferences = Schema.is(PullRequestListPreferences);
@@ -85,6 +101,7 @@ const ThreadProject = Schema.Struct({
   projectId: Schema.NonEmptyString,
 });
 const isThreadProject = Schema.is(ThreadProject);
+const isIssueListFilters = Schema.is(IssueListFilters);
 
 export interface Preferences {
   readonly navigationTabOrder?: readonly string[];
@@ -128,6 +145,7 @@ export interface Preferences {
   readonly threadListFilters?: ThreadListFilters;
   readonly pullRequestListFilters?: PullRequestListPreferences;
   readonly workspaceSelections?: WorkspaceSelections;
+  readonly issueListFilters?: IssueListFilters;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -205,6 +223,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListFilters?: ThreadListFilters;
     pullRequestListFilters?: PullRequestListPreferences;
     workspaceSelections?: WorkspaceSelections;
+    issueListFilters?: IssueListFilters;
   } = {};
 
   if (Array.isArray(parsed.hiddenNavigationTabs)) {
@@ -358,6 +377,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isWorkspaceSelections(parsed.workspaceSelections)) {
     preferences.workspaceSelections = parsed.workspaceSelections;
+  }
+  if (isIssueListFilters(parsed.issueListFilters)) {
+    preferences.issueListFilters = parsed.issueListFilters;
   }
   return preferences;
 }

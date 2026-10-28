@@ -144,6 +144,7 @@ export function AdaptiveWorkspaceLayout(props: {
   readonly workspaceRouteName: string | undefined;
   readonly workspaceRouteKeys: ReadonlyArray<string>;
   readonly selectedPullRequestKey?: string | null;
+  readonly selectedIssueKey?: string | null;
 }) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   if (!AsyncResult.isSuccess(preferencesResult)) {
@@ -172,6 +173,7 @@ function AdaptiveWorkspaceLayoutContent(
     readonly workspaceRouteName: string | undefined;
     readonly workspaceRouteKeys: ReadonlyArray<string>;
     readonly selectedPullRequestKey?: string | null;
+    readonly selectedIssueKey?: string | null;
   } & {
     readonly projectGroupingMode: SidebarProjectGroupingMode;
     readonly savedThreadListFilters?: ThreadListFilters | undefined;
@@ -537,7 +539,12 @@ function AdaptiveWorkspaceLayoutContent(
       if (layout.primarySidebarOverlaysContent) setPrimarySidebarVisible(false);
       workspace?.dispatch({
         type: "select",
-        tab: detail.name === "Thread" ? "threads" : "pullRequests",
+        tab:
+          detail.name === "Thread"
+            ? "threads"
+            : detail.name === "Issue"
+              ? "issues"
+              : "pullRequests",
       });
       startOpeningDetail(detail);
       navigation.dispatch(selectWorkspaceDetail(detail, sheet));
@@ -886,6 +893,7 @@ function AdaptiveWorkspaceLayoutContent(
               <AndroidWorkspaceSidebar
                 onRequestVisibility={revealPrimarySidebar}
                 selectedPullRequestKey={props.selectedPullRequestKey ?? null}
+                selectedIssueKey={props.selectedIssueKey ?? null}
               >
                 <AndroidHomeFabLayout
                   sidebar

@@ -12,6 +12,7 @@ import { ScreenContent } from "../../components/ui/ScreenContent";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { HomeRouteScreen } from "../home/HomeRouteScreen";
 import { PullRequestsScreen } from "../pull-requests/PullRequestsScreen";
+import { IssuesScreen } from "../issues/IssuesScreen";
 import { PullRequestToolbar } from "../pull-requests/PullRequestToolbar.android";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { AndroidWorkspaceNavigation, FloatingWorkspaceTabs } from "./AndroidWorkspaceNavigation";
@@ -56,16 +57,20 @@ export function WorkspaceRootScreen() {
         renderTab={(tab) =>
           tab === "threads" ? (
             <HomeRouteScreen />
-          ) : tab !== "pullRequests" ? (
+          ) : tab !== "pullRequests" && tab !== "issues" ? (
             <WorkspaceExtraTab tab={tab} />
           ) : (
             <>
               <NativeStackScreenOptions options={{ headerShown: false }} />
-              <AndroidScreenHeader title="Pull requests" />
+              <AndroidScreenHeader title={tab === "issues" ? "Issues" : "Pull requests"} />
               <View className="flex-1 items-center justify-center px-10">
                 <EmptyState
-                  title="Select a pull request"
-                  detail="Choose a pull request from the sidebar to review it."
+                  title={tab === "issues" ? "Select an issue" : "Select a pull request"}
+                  detail={
+                    tab === "issues"
+                      ? "Choose an issue from the sidebar to read it."
+                      : "Choose a pull request from the sidebar to review it."
+                  }
                   variant="plain"
                 />
               </View>
@@ -98,6 +103,13 @@ export function WorkspaceRootScreen() {
               renderTab={(tab) =>
                 tab === "threads" ? (
                   <HomeRouteScreen />
+                ) : tab === "issues" ? (
+                  <>
+                    <PullRequestToolbar tab="issues" filters={null} />
+                    <ScreenContent>
+                      <IssuesScreen />
+                    </ScreenContent>
+                  </>
                 ) : tab !== "pullRequests" ? (
                   <WorkspaceExtraTab tab={tab} />
                 ) : (

@@ -97,6 +97,8 @@ import {
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
   WS_METHODS,
+  WsCoreRpcGroup,
+  WsIssuesRpcGroup,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import {
@@ -239,6 +241,9 @@ import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as TriageService from "./triage/TriageService.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
+import * as IssueService from "./issue/IssueService.ts";
+import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
+import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
@@ -561,8 +566,10 @@ const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
 // RpcGroup.toLayer derives each handler's requirements by scanning every RPC in
 // the group, so its type cost grows with handlers × RPCs. Near 200 methods that
 // crosses TypeScript's instantiation limit and the layer's requirements degrade to
-// `any`, so the handlers are registered as two disjoint, smaller groups.
-type ServerWsRpc = RpcGroup.Rpcs<typeof ServerWsRpcGroup>;
+// `any`, so the handlers are registered as two disjoint, smaller groups. Issue RPCs have their
+// own handler layer.
+const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);
+type ServerWsRpc = RpcGroup.Rpcs<typeof ServerWsCoreRpcGroup>;
 const SPLIT_WS_RPC_PREFIXES = ["server", "pullRequests", "provider", "orchestration"] as const;
 type SplitWsRpc = Extract<
   ServerWsRpc,
@@ -572,9 +579,10 @@ const isSplitWsRpc = (rpc: ServerWsRpc): rpc is SplitWsRpc =>
   SPLIT_WS_RPC_PREFIXES.some((prefix) => rpc._tag.startsWith(`${prefix}.`));
 const isOtherWsRpc = (rpc: ServerWsRpc): rpc is Exclude<ServerWsRpc, SplitWsRpc> =>
   !isSplitWsRpc(rpc);
-const serverWsRpcs = Array.from(ServerWsRpcGroup.requests.values());
+const serverWsRpcs = Array.from(ServerWsCoreRpcGroup.requests.values());
 const SplitWsRpcGroup = RpcGroup.make(...serverWsRpcs.filter(isSplitWsRpc));
 const OtherWsRpcGroup = RpcGroup.make(...serverWsRpcs.filter(isOtherWsRpc));
+const ServerWsIssuesRpcGroup = WsIssuesRpcGroup.middleware(RpcInstrumentation);
 // Replaying each intervening event costs a shell refetch; past this gap a
 // single O(active-threads) snapshot is cheaper and bounded.
 const SHELL_RESUME_MAX_GAP = 1_000;
@@ -1213,6 +1221,46 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       ),
     );
   },
+);
+
+export const layerWsIssuesRpc = ServerWsIssuesRpcGroup.toLayer(
+  Effect.gen(function* () {
+    const issues = yield* IssueService.IssueService;
+    const threadIssues = yield* ThreadIssueService.ThreadIssueService;
+    const issueTrackers = yield* IssueTrackerConnections.IssueTrackerConnections;
+    return ServerWsIssuesRpcGroup.of({
+      [WS_METHODS.issuesList]: (input) => issues.list(input),
+      [WS_METHODS.issuesDetail]: (input) => issues.detail(input),
+      [WS_METHODS.issuesResolveUrl]: (input) =>
+        Effect.annotateCurrentSpan(
+          input.projectId === undefined ? {} : { "project.id": input.projectId },
+        ).pipe(Effect.andThen(issues.resolveUrl(input.url, input.projectId, input.connectionId))),
+      [WS_METHODS.issuesComments]: (input) => issues.comments(input),
+      [WS_METHODS.issuesTemplates]: (input) => issues.templates(input),
+      [WS_METHODS.issuesCandidates]: (input) => issues.candidates(input),
+      [WS_METHODS.issuesCreate]: (input) => issues.create(input),
+      [WS_METHODS.issuesComment]: (input) => issues.comment(input),
+      [WS_METHODS.issuesUpdate]: (input) => issues.update(input),
+      [WS_METHODS.issuesSetState]: (input) => issues.setState(input),
+      [WS_METHODS.issuesReact]: (input) => issues.react(input),
+      [WS_METHODS.issuesHistory]: (input) => issues.history(input),
+      [WS_METHODS.issuesLinkedPullRequests]: (input) => issues.linkedPullRequests(input),
+      [WS_METHODS.issuesHierarchy]: (input) => issues.hierarchy(input),
+      [WS_METHODS.issuesDependencies]: (input) => issues.dependencies(input),
+      [WS_METHODS.issuesSetDependency]: (input) => issues.setDependency(input),
+      [WS_METHODS.issuesLabelCandidates]: (input) => issues.labelCandidates(input),
+      [WS_METHODS.issuesAssigneeCandidates]: (input) => issues.assigneeCandidates(input),
+      [WS_METHODS.issuesEditComment]: (input) => issues.editComment(input),
+      [WS_METHODS.issuesSetParent]: (input) => issues.setParent(input),
+      [WS_METHODS.issuesRefreshThreadLinks]: (input) =>
+        threadIssues.refresh(input.threadId, { staleOnly: true }),
+
+      [WS_METHODS.issueTrackersList]: () => issueTrackers.list,
+      [WS_METHODS.issueTrackersScopes]: (input) => issueTrackers.listScopes(input),
+      [WS_METHODS.issueTrackersConnect]: (input) => issueTrackers.connect(input),
+      [WS_METHODS.issueTrackersBindProject]: (input) => issueTrackers.bindProject(input),
+    });
+  }),
 );
 
 export const layerWsRpc = (
@@ -1857,7 +1905,7 @@ export const layerWsRpc = (
         return result;
       });
 
-      const handlers = ServerWsRpcGroup.of({
+      const handlers = ServerWsCoreRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -2837,6 +2885,7 @@ export const layerWsRpc = (
               input.resource._tag === "native-app-icon" ||
               input.resource._tag === "tool-output-image" ||
               input.resource._tag === SOURCE_CONTROL_MEDIA_ASSET ||
+              input.resource._tag === "linear-media" ||
               // A network path is served only from the thread's project, looked up below.
               (input.resource._tag === "media-file" &&
                 path.isAbsolute(input.resource.path) &&
@@ -3249,6 +3298,9 @@ export const layer = Layer.unwrap(
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const issues = yield* IssueService.IssueService;
+    const threadIssues = yield* ThreadIssueService.ThreadIssueService;
+    const issueTrackers = yield* IssueTrackerConnections.IssueTrackerConnections;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const peerLinks = yield* PeerLinks.PeerLinks;
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
@@ -3314,7 +3366,10 @@ export const layer = Layer.unwrap(
           return httpEffect;
         }).pipe(
           Effect.provide(
-            layerWsRpc(session, clientAnalyticsProps, serverBrowser).pipe(
+            Layer.merge(
+              layerWsRpc(session, clientAnalyticsProps, serverBrowser),
+              layerWsIssuesRpc,
+            ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Handler-context reporters see only request defects, not server-wide defects.
               Layer.provide(DefectReporter.layer),
@@ -3324,6 +3379,11 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               // Share server-lifetime PR caches so WS mutations invalidate every client's HTTP diffs.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+              Layer.provide(Layer.succeed(IssueService.IssueService, issues)),
+              Layer.provide(Layer.succeed(ThreadIssueService.ThreadIssueService, threadIssues)),
+              Layer.provide(
+                Layer.succeed(IssueTrackerConnections.IssueTrackerConnections, issueTrackers),
+              ),
               Layer.provide(OtlpEndpointCheck.layer),
               Layer.provide(
                 Layer.succeed(

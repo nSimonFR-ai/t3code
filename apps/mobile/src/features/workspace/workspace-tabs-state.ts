@@ -16,9 +16,9 @@ export type WorkspaceTab = NavigationTab;
 export type WorkspaceSearchTab = WorkspaceTab | "settings";
 export type WorkspaceSearchMode = "resting" | "active" | "expanded";
 
-/** Settings, Chats and pull requests pair a list with a detail column; Usage is one page. */
+/** Settings, Chats, pull requests and issues pair a list with a detail column; Usage is one page. */
 export function workspaceUsesColumns(tab: WorkspaceTab, settingsOpen = false) {
-  return settingsOpen || tab === "threads" || tab === "pullRequests";
+  return settingsOpen || tab === "threads" || tab === "pullRequests" || tab === "issues";
 }
 
 export interface WorkspaceTabState {
@@ -45,6 +45,7 @@ export function initialWorkspaceTabsState(): WorkspaceTabsState {
     tabs: {
       threads: emptyTab(),
       pullRequests: emptyTab(),
+      issues: emptyTab(),
       usage: emptyTab(),
       settings: emptyTab(),
     },
@@ -72,7 +73,7 @@ export function workspaceTabsReducer(
           selectionRevision: state.selectionRevision + 1,
         };
   const tab = action.tab ?? state.selectedTab;
-  if (tab !== "threads" && tab !== "pullRequests" && tab !== "settings") return state;
+  if (tab === "usage") return state;
   const current = state.tabs[tab];
   let next: WorkspaceTabState;
   switch (action.type) {
@@ -107,8 +108,16 @@ export function workspaceTabsReducer(
   return { ...state, tabs: { ...state.tabs, [tab]: next } };
 }
 
+/** The search field label of each list with its own search. */
+export const WORKSPACE_SEARCH_LABELS = {
+  threads: "Search threads",
+  pullRequests: "Search pull requests",
+  issues: "Search issues",
+  settings: "Search settings",
+} as const satisfies Readonly<Record<Exclude<WorkspaceSearchTab, "usage">, string>>;
+
 export const WORKSPACE_TOOLBAR = { height: 48, expandedGap: 10, edge: 16, gap: 8 };
-export const WORKSPACE_DOCK = { height: 48, tabsWidth: 176, gap: 12, bottomGap: 6 };
+export const WORKSPACE_DOCK = { height: 48, tabsWidth: 252, gap: 12, bottomGap: 6 };
 
 export function workspaceDockBottomClearance(input: {
   readonly bottomInset: number;

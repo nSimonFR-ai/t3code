@@ -15,6 +15,8 @@ import {
   type ComposerThreadTarget,
   composerDraftHasUserContent,
   type DraftId,
+  pendingIssueMatches,
+  type PendingIssueContext,
   useComposerDraftStore,
 } from "../../composerDraftStore";
 import type { ComposerHandleRef } from "../../composerHandleContext";
@@ -40,6 +42,7 @@ import {
   startFanoutThread,
 } from "./chatViewSend";
 import type { useLocalDispatchState } from "./useLocalDispatchState";
+import { withIssueThreadHandoff } from "../issue/useIssueThreadHandoff";
 
 interface MultipleModelSendInput {
   readonly environmentId: EnvironmentId;
@@ -96,6 +99,8 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     readFileBlockReason,
     buildOutgoingMessageContext,
     isCurrentSend,
+    pendingIssueUrl,
+    pendingIssueContext,
   }: {
     readonly threadId: ThreadId;
     readonly project: EnvironmentProject;
@@ -112,6 +117,8 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     ) => ReturnType<typeof buildMessageContext>;
     /** False once a newer send from this composer started. */
     readonly isCurrentSend: () => boolean;
+    readonly pendingIssueUrl: string | undefined;
+    readonly pendingIssueContext: PendingIssueContext;
   }) => {
     const { attachments: attachmentsSnapshot, messageText } = sendSnapshot;
     const failedSelections: ModelSelection[] = [];
@@ -158,7 +165,8 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
             model: target.selection.model,
             uncertainSubmissions: uncertainSubmissionsRef.current,
             start: (targetThreadId) => {
-              return startThreadTurn({
+              return withIssueThreadHandoff(
+                startThreadTurn({
                 environmentId,
                 input: {
                   threadId: targetThreadId,
@@ -196,7 +204,13 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
                   },
                   createdAt: createdAt,
                 },
-              });
+              }),
+                composerDraftTarget,
+                scopeThreadRef(environmentId, targetThreadId),
+                project.id,
+                pendingIssueUrl,
+                pendingIssueContext,
+              );
             },
             openThread: (threadId) =>
               void navigate({
@@ -222,6 +236,17 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
       }
       if (failedSelections.length === 0 && usesAttachmentUploads) {
         releaseDraftAttachments(attachmentsSnapshot);
+      }
+      if (
+        failedSelections.length === 0 &&
+        pendingIssueUrl &&
+        pendingIssueMatches(
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
+          pendingIssueUrl,
+          pendingIssueContext,
+        )
+      ) {
+        useComposerDraftStore.getState().setPendingIssueUrl(composerDraftTarget, undefined);
       }
     });
     if (sendResult._tag === "Failure") {
@@ -263,6 +288,8 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
                   sendInFlightRef.current ||
                   composerDraftHasUserContent(
                     useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
+                    pendingIssueUrl,
+                    pendingIssueContext,
                   )
                 ) {
                   toastManager.update(recoveryToastId, {

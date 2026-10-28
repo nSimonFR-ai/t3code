@@ -18,6 +18,11 @@ import {
   type WorkspaceTabsState,
 } from "./workspace-tabs-state";
 
+export interface WorkspaceScrollAnchor {
+  readonly key: string;
+  readonly viewOffset: number;
+}
+
 export const WorkspaceTabsContext = createContext<{
   readonly state: WorkspaceTabsState;
   readonly dispatch: Dispatch<WorkspaceTabsAction>;
@@ -26,6 +31,8 @@ export const WorkspaceTabsContext = createContext<{
   readonly settingsOpen: boolean;
   readonly getScrollOffset: (tab: WorkspaceSearchTab) => number;
   readonly recordScrollOffset: (tab: WorkspaceSearchTab, offset: number) => void;
+  readonly getScrollAnchor: (tab: WorkspaceTab) => WorkspaceScrollAnchor | undefined;
+  readonly recordScrollAnchor: (tab: WorkspaceTab, anchor: WorkspaceScrollAnchor) => void;
 } | null>(null);
 
 export function useWorkspaceTabs() {
@@ -57,9 +64,11 @@ function createWorkspaceTabsModel() {
   const scrollOffsets: Record<WorkspaceSearchTab, number> = {
     threads: 0,
     pullRequests: 0,
+    issues: 0,
     usage: 0,
     settings: 0,
   };
+  const scrollAnchors: Partial<Record<WorkspaceTab, WorkspaceScrollAnchor>> = {};
   return {
     stored,
     resolved: Atom.make((get) =>
@@ -68,6 +77,10 @@ function createWorkspaceTabsModel() {
     getScrollOffset: (tab: WorkspaceSearchTab) => scrollOffsets[tab],
     recordScrollOffset: (tab: WorkspaceSearchTab, offset: number) => {
       scrollOffsets[tab] = offset;
+    },
+    getScrollAnchor: (tab: WorkspaceTab) => scrollAnchors[tab],
+    recordScrollAnchor: (tab: WorkspaceTab, anchor: WorkspaceScrollAnchor) => {
+      scrollAnchors[tab] = anchor;
     },
   };
 }
@@ -88,6 +101,8 @@ export function WorkspaceTabsProvider(props: {
     settingsOpen: props.settingsOpen ?? false,
     getScrollOffset: model.getScrollOffset,
     recordScrollOffset: model.recordScrollOffset,
+    getScrollAnchor: model.getScrollAnchor,
+    recordScrollAnchor: model.recordScrollAnchor,
   };
   return <WorkspaceTabsContext value={context}>{props.children}</WorkspaceTabsContext>;
 }

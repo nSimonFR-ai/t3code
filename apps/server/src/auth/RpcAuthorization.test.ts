@@ -6,6 +6,8 @@ import {
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
+  IssueTrackerKind,
+  ProjectId,
   ThreadId,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -47,6 +49,100 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.serverPrepareTriage)).toBe(
       AuthOrchestrationOperateScope,
     );
+  });
+
+  it("reads issues under the orchestration read scope and writes them like pull requests", () => {
+    for (const method of [
+      WS_METHODS.issuesList,
+      WS_METHODS.issuesDetail,
+      WS_METHODS.issuesResolveUrl,
+      WS_METHODS.issuesComments,
+      WS_METHODS.issuesTemplates,
+      WS_METHODS.issuesCandidates,
+      WS_METHODS.issuesHistory,
+      WS_METHODS.issuesHierarchy,
+      WS_METHODS.issuesDependencies,
+      WS_METHODS.issuesLinkedPullRequests,
+      WS_METHODS.issuesLabelCandidates,
+      WS_METHODS.issuesAssigneeCandidates,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    for (const method of [
+      WS_METHODS.issuesCreate,
+      WS_METHODS.issuesComment,
+      WS_METHODS.issuesUpdate,
+      WS_METHODS.issuesSetState,
+      WS_METHODS.issuesReact,
+      WS_METHODS.issuesEditComment,
+      WS_METHODS.issuesSetParent,
+      WS_METHODS.issuesSetDependency,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthSourceControlWriteScope);
+    }
+  });
+
+  it("requires an orchestration operate grant to refresh issue snapshots", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.issuesRefreshThreadLinks)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
+  it("treats a standalone tracker credential as a setting", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.issueTrackersScopes)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.issueTrackersList)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    for (const method of [WS_METHODS.issueTrackersConnect, WS_METHODS.issueTrackersBindProject]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthSettingsWriteScope);
+    }
+  });
+
+  it("requires source control writes to start, retry, or cancel project clones", () => {
+    for (const method of [
+      WS_METHODS.projectCloneStart,
+      WS_METHODS.projectCloneRetry,
+      WS_METHODS.projectCloneCancel,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthSourceControlWriteScope);
+    }
+    expect(requiredScopeForRpcMethod(WS_METHODS.subscribeProjectClones)).toBe(
+      AuthOrchestrationReadScope,
+    );
+  });
+
+  it("separates viewing pull request file progress from writing it", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsFilesViewed)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsSetFilesViewed)).toBe(
+      AuthSourceControlWriteScope,
+    );
+  });
+
+  it("separates preview control from observation", () => {
+    for (const method of [
+      WS_METHODS.previewOpen,
+      WS_METHODS.previewNavigate,
+      WS_METHODS.previewResize,
+      WS_METHODS.previewRefresh,
+      WS_METHODS.previewClose,
+      WS_METHODS.previewReportStatus,
+      WS_METHODS.previewAdjust,
+      WS_METHODS.previewClearProfile,
+      WS_METHODS.previewReportProfiles,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthPreviewOperateScope);
+    }
+    for (const method of [
+      WS_METHODS.previewList,
+      WS_METHODS.subscribePreviewEvents,
+      WS_METHODS.subscribeDiscoveredLocalServers,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
   });
 
   it("separates passive terminal observation from operations that can change a shell", () => {
@@ -317,6 +413,19 @@ it.effect("separates host file URLs from readable attachment URLs", () =>
     yield* client[WS_METHODS.assetsCreateUrl]({
       resource: { _tag: "attachment", attachmentId: "image" },
     });
+    yield* client[WS_METHODS.assetsCreateUrl]({
+      resource: {
+        _tag: "linear-media",
+        issue: {
+          projectId: ProjectId.make("project"),
+          tracker: IssueTrackerKind.make("linear"),
+          scope: "workspace/ENG",
+          key: "ENG-12",
+          connectionId: "account-b",
+        },
+        url: "https://uploads.linear.app/workspace/file/image.png",
+      },
+    });
     for (const resource of [
       { _tag: "workspace-file", threadId: ThreadId.make("thread"), path: "file.txt" },
       { _tag: "media-file", threadId: ThreadId.make("thread"), path: "/repo/image.png" },
@@ -329,7 +438,7 @@ it.effect("separates host file URLs from readable attachment URLs", () =>
         requiredPermission: AuthFilesystemReadScope,
       });
     }
-    expect(handled).toBe(1);
+    expect(handled).toBe(2);
   }).pipe(Effect.scoped),
 );
 

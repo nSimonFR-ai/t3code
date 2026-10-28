@@ -247,6 +247,10 @@
       "types": "./src/threadPullRequests.ts",
       "import": "./src/threadPullRequests.ts"
     },
+    "./issueUrl": {
+      "types": "./src/issueUrl.ts",
+      "import": "./src/issueUrl.ts"
+    },
     "./composerTrigger": {
       "types": "./src/composerTrigger.ts",
       "import": "./src/composerTrigger.ts"

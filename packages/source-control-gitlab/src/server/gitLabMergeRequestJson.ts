@@ -785,7 +785,7 @@ const RawAwardEmojiPageSchema = Schema.Struct({
 
 const decodeAwardEmojiPage = decodeJsonResult(RawAwardEmojiPageSchema);
 
-function toReactions(
+export function toReactions(
   nodes: Schema.Schema.Type<typeof RawAwardEmojiNodesSchema>,
   viewer: string | null,
 ): ReadonlyArray<PullRequestReaction> {

@@ -27,6 +27,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { WorkspaceTabsProvider, useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { selectedIssueKey as displayedIssueKey } from "../issues/issueSelection";
 import { WorkspaceNativeTabs } from "../workspace/WorkspaceNativeTabs.ios";
 import { workspaceUsesColumns } from "../workspace/workspace-tabs-state";
 import { isSettingsRoute, settingsOpenIn } from "../settings/settings-navigation";
@@ -84,6 +85,7 @@ function ColumnScreen(props: {
   readonly attached?: boolean;
   readonly selectedThreadKey?: string | null;
   readonly selectedPullRequestKey?: string | null;
+  readonly selectedIssueKey?: string | null;
   readonly onDismiss: (routeKey: string, native: boolean) => void;
   readonly onAppearance: (type: "willAppear" | "didAppear" | "willDisappear", key: string) => void;
   readonly onCompose?: () => void;
@@ -102,6 +104,7 @@ function ColumnScreen(props: {
         presented,
         selectedThreadKey: props.selectedThreadKey ?? null,
         selectedPullRequestKey: props.selectedPullRequestKey ?? null,
+        selectedIssueKey: props.selectedIssueKey ?? null,
       }
     : null;
   const key = descriptor.route.key;
@@ -225,7 +228,10 @@ function WorkspaceColumns(
   // The cover detail rail needs room for thread tools above the fixed tabs.
   // The unfolded Duo keeps compose in its detail bar.
   const detailCompose =
-    deviceType === "duo-unfolded" && selectedTab !== "pullRequests" && !settingsOpen
+    deviceType === "duo-unfolded" &&
+    selectedTab !== "pullRequests" &&
+    selectedTab !== "issues" &&
+    !settingsOpen
       ? openNewTask
       : undefined;
   const inspector = use(NativeWorkspaceInspectorContext);
@@ -248,6 +254,10 @@ function WorkspaceColumns(
     typeof pullRequestParams.number === "number"
       ? `${pullRequestParams.environmentId}:${pullRequestParams.host}:${pullRequestParams.repository}:${pullRequestParams.number}`
       : null;
+  const selectedIssueKey = displayedIssueKey({
+    routes: props.detail,
+    index: props.detail.length - 1,
+  });
   const selectedThreadKey =
     threadParams &&
     "environmentId" in threadParams &&
@@ -324,7 +334,7 @@ function WorkspaceColumns(
         if (workspace.some((route) => route.name !== "Home" && route.name !== "Settings")) return;
         const tab = workspace.some((route) => route.name === "Settings")
           ? "settings"
-          : (["threads", "pullRequests", "usage"] as const).find((candidate) =>
+          : (["threads", "pullRequests", "issues", "usage"] as const).find((candidate) =>
               workspaceTabs?.isTabActive(candidate),
             );
         openWorkspaceTab(tab ?? "threads", { columns: true });
@@ -371,6 +381,7 @@ function WorkspaceColumns(
             primary
             selectedThreadKey={selectedThreadKey}
             selectedPullRequestKey={selectedPullRequestKey}
+            selectedIssueKey={selectedIssueKey}
             onDismiss={handleNativeDismiss}
             onAppearance={followCollapsedSplit}
             navigation={props.navigation}

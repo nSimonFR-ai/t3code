@@ -1,13 +1,14 @@
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import { retryAtFromHeader } from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 import * as GitCafeCredentials from "./GitCafeCredentials.ts";
 import * as GitCafeHosts from "./gitCafeHosts.ts";
@@ -30,6 +31,7 @@ export class GitCafeApiError extends Schema.TaggedError<GitCafeApiError>()("GitC
   status: Schema.NullOr(Schema.Int),
   reason: GitCafeApiFailure,
   detail: Schema.String,
+  retryAt: Schema.optional(Schema.Number),
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
@@ -52,15 +54,6 @@ export class GitCafeApi extends Context.Service<
   }
 >()("@t3tools/source-control-gitcafe/server/GitCafeApi") {}
 
-const decodeProblem = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({
-      title: Schema.optional(Schema.String),
-      detail: Schema.optional(Schema.String),
-    }),
-  ),
-);
-
 const reasonForStatus = (status: number): typeof GitCafeApiFailure.Type =>
   status === 401
     ? "unauthenticated"
@@ -69,13 +62,6 @@ const reasonForStatus = (status: number): typeof GitCafeApiFailure.Type =>
       : status === 404
         ? "not-found"
         : "failed";
-
-const MAX_PROBLEM_TEXT = 300;
-const boundedProblemText = (text: string | undefined) => {
-  const line = text?.replace(/\s+/gu, " ").trim();
-  if (!line) return undefined;
-  return line.length > MAX_PROBLEM_TEXT ? `${line.slice(0, MAX_PROBLEM_TEXT)}…` : line;
-};
 
 const credentialFailure = (
   error: GitCafeCredentials.GitCafeCredentialUnavailableError,
@@ -115,7 +101,10 @@ export const make = Effect.gen(function* () {
 
   const request = Effect.fn("GitCafeApi.request")(function* (input: GitCafeApiRequest) {
     const fail = (
-      fields: Pick<GitCafeApiError, "status" | "reason" | "detail"> & { cause?: unknown },
+      fields: Pick<GitCafeApiError, "status" | "reason" | "detail"> & {
+        cause?: unknown;
+        retryAt?: number;
+      },
     ) =>
       new GitCafeApiError({
         host: input.host,
@@ -123,6 +112,7 @@ export const make = Effect.gen(function* () {
         status: fields.status,
         reason: fields.reason,
         detail: fields.detail,
+        ...(fields.retryAt === undefined ? {} : { retryAt: fields.retryAt }),
         ...(fields.cause === undefined ? {} : { cause: fields.cause }),
       });
     // Remote URLs must not send tokens outside GitCafe's hosts.
@@ -169,6 +159,7 @@ export const make = Effect.gen(function* () {
           status: response.status,
           location: response.headers.location,
           text: yield* response.text,
+          retryAfter: response.headers["retry-after"],
         };
       }).pipe(
         Effect.timeout(TIMEOUT),
@@ -187,17 +178,19 @@ export const make = Effect.gen(function* () {
       url = next;
       response = yield* send(url);
     }
-    const { status, text } = response;
+    const { status, text, retryAfter } = response;
     yield* Effect.annotateCurrentSpan({ "http.response.status_code": status });
     if (status >= 200 && status < 300) return text;
     // The source may hold a newer token than the one that was refused.
     if (status === 401) yield* credentials.invalidate(host);
-    const problem = Option.getOrUndefined(decodeProblem(text));
+    const retryAt =
+      status === 429 ? retryAtFromHeader(retryAfter, yield* Clock.currentTimeMillis) : undefined;
     return yield* fail({
       status,
       reason: reasonForStatus(status),
-      detail:
-        boundedProblemText(problem?.detail ?? problem?.title) ?? `GitCafe answered HTTP ${status}.`,
+      detail: `GitCafe answered HTTP ${status}.`,
+      ...(retryAt === undefined ? {} : { retryAt }),
+      cause: { status, body: text.slice(0, 2048) },
     });
   });
 

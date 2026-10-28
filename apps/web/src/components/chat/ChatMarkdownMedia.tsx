@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "../../assets/assetUrls";
+import type { IssueLinkContext } from "../../lib/openIssueLink";
 import { cn } from "../../lib/utils";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { MediaActions, type MediaActionSource } from "../media/MediaActions";
@@ -307,6 +308,44 @@ export function ChatMarkdownVideo(props: {
   );
 }
 
+function linearMediaUrl(source: string): string | null {
+  const url = URL.parse(source);
+  return url !== null &&
+    url.protocol === "https:" &&
+    url.hostname === "uploads.linear.app" &&
+    url.port === "" &&
+    url.username === "" &&
+    url.password === ""
+    ? source
+    : null;
+}
+
+export function linearMediaAsset(
+  context: IssueLinkContext | undefined,
+  source: string,
+): {
+  environmentId: EnvironmentId;
+  resource: Extract<AssetResource, { _tag: "linear-media" }>;
+} | null {
+  const url = linearMediaUrl(source);
+  if (
+    url === null ||
+    context?.tracker !== "linear" ||
+    context.scope === undefined ||
+    context.key === undefined
+  )
+    return null;
+  const { environmentId, ...issue } = context;
+  return {
+    environmentId,
+    resource: {
+      _tag: "linear-media",
+      issue: { ...issue, scope: context.scope, key: context.key },
+      url,
+    },
+  };
+}
+
 export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props: {
   readonly environmentId: EnvironmentId;
   readonly resource: Extract<
@@ -317,6 +356,7 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
         | "workspace-file"
         | "media-file"
         | typeof SOURCE_CONTROL_MEDIA_ASSET
+        | "linear-media"
         | "tool-output-image";
     }
   >;

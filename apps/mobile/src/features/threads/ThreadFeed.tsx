@@ -1,7 +1,7 @@
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
-import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { useWorkspaceSettledContentWidth } from "../layout/workspace-content-width";
+import { useOpenIssueLink } from "../../native/useOpenIssueLink";
 import { ThreadMarkdownVideo, ThreadMediaVisibleContext } from "./ThreadMarkdownVideo";
 import { useMarkdownImageSource } from "../../native/useMarkdownImageSource";
 import {
@@ -2091,7 +2091,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   const guestShare = useThreadGuestShare(props.detailRef);
   const deviceType = useDeviceType();
   const duoColumns = useNativeWorkspaceColumnsSupported() && isDuoDevice(deviceType);
-  const openPullRequest = useOpenPullRequest();
+  const openLink = useOpenIssueLink();
   const navigation = useNavigation();
   const openLinkedThread = useOpenLinkedThread();
   const onOpenTurnDiff = useCallback(
@@ -2406,7 +2406,7 @@ export const ThreadFeed = memo(function ThreadFeed({
         });
         return;
       }
-      void openPullRequest(presentation.href);
+      void openLink(presentation.href);
     }
   };
   const resolveImageSource = useMarkdownImageSource({

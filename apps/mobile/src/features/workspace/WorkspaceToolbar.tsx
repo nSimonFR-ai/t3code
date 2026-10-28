@@ -23,6 +23,7 @@ import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 const TABS: ReadonlyArray<{ id: WorkspaceTab; label: string; icon: AppSymbolName }> = [
   { id: "threads", label: "Threads", icon: "text.bubble" },
   { id: "pullRequests", label: "PRs", icon: PullRequestGlyph.pullRequest },
+  { id: "issues", label: "Issues", icon: "circle.inset.filled" },
 ];
 
 function ToolbarButton(props: {
@@ -61,7 +62,7 @@ export function WorkspaceToolbar(props: {
   const focusSearch = () => {
     if (!workspace) return false;
     const tab = workspace.state.selectedTab;
-    if (tab !== "threads" && tab !== "pullRequests") return false;
+    if (tab === "usage") return false;
     workspace.dispatch({ type: "scroll", tab, offset: workspace.getScrollOffset(tab) });
     workspace.dispatch({ type: "search" });
     setFocusRequest((request) => request + 1);

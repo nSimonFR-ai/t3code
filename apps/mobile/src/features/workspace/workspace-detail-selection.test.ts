@@ -29,6 +29,8 @@ const options = {
     "ThreadFiles",
     "PullRequest",
     "PullRequestReviewers",
+    "Issue",
+    "IssueCompose",
     "Settings",
     "SettingsAppearance",
     "GitOverview",
@@ -44,6 +46,19 @@ const threadB = { name: "Thread", params: { environmentId: "env", threadId: "b" 
 const pullRequest = {
   name: "PullRequest",
   params: { environmentId: "env", projectId: "p", repository: "o/r", number: 1, host: "h" },
+} as const;
+
+const issue = {
+  name: "Issue",
+  params: {
+    environmentId: "env",
+    projectId: "p",
+    tracker: "linear",
+    host: "linear.app",
+    scope: "ENG",
+    key: "ENG-7",
+    connectionId: "CaseSensitive",
+  },
 } as const;
 
 function apply(state: State, action: Parameters<typeof base.getStateForAction>[1]) {
@@ -72,6 +87,15 @@ const page = (state: State) => ({
 });
 
 describe("selectWorkspaceDetail", () => {
+  it("reselects an issue in place, closing its sheet and keeping its account", () => {
+    const first = select(home(), issue);
+    const withSheet = push(first, "IssueCompose", { ...issue.params, mode: "comment" });
+    const again = select(withSheet, issue);
+    expect(page(again)).toEqual({ names: ["Home", "Issue"], index: 1 });
+    expect(again.routes[1]?.key).toBe(first.routes[1]?.key);
+    expect(again.routes[1]?.params).toEqual(issue.params);
+  });
+
   it("swaps the open thread in place instead of pushing another", () => {
     const first = select(home(), threadA);
     const second = select(first, threadB);

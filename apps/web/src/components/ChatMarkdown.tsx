@@ -107,7 +107,11 @@ import {
   type ExpandedImagePreview,
 } from "./chat/ExpandedImagePreview";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
-import { markdownImageGallery } from "./chat/markdownImageGallery";
+import {
+  linkedMediaItem,
+  markdownImageGallery,
+  markdownImageItems,
+} from "./chat/markdownImageGallery";
 import { type MediaActionSource } from "./media/MediaActions";
 import { resolveProtocolRelativeMediaUrl } from "./media/mediaContent";
 import {
@@ -175,6 +179,7 @@ import {
 import { resolvePullRequestPreviewTarget } from "@t3tools/client-runtime/change-request-links";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
+import { useOpenIssueLink, type IssueLinkContext } from "~/lib/openIssueLink";
 import { useOpenLink } from "../browser/useOpenLink";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isPreviewAvailableFor } from "../browser/previewRuntime";
@@ -197,6 +202,7 @@ import {
   ChatMarkdownImage,
   ChatMarkdownImageFallback,
   ChatMarkdownVideo,
+  linearMediaAsset,
   MarkdownLinkContext,
   markdownImageCopy,
 } from "./chat/ChatMarkdownMedia";
@@ -224,6 +230,7 @@ interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
+  issueLinkContext?: IssueLinkContext | undefined;
   pullRequestPanelRef?: ScopedThreadRef | undefined;
   environmentId?: EnvironmentId | undefined;
   onTaskListChange?: ((input: { markerOffset: number; checked: boolean }) => void) | undefined;
@@ -439,6 +446,7 @@ function useChatMarkdownState({
   cwd,
   threadRef,
   pullRequestPanelRef,
+  issueLinkContext,
   environmentId: explicitEnvironmentId,
   onTaskListChange,
   isStreaming = false,
@@ -573,8 +581,11 @@ function useChatMarkdownState({
       },
     );
   };
-  const { pullRequestsEnabled, availableEditors, revealInFileManagerLabel } = useAtomValue(
+  const { availableEditors, revealInFileManagerLabel } = useAtomValue(
     markdownServerConfigFieldsAtom(environmentId),
+  );
+  const { pullRequestsEnabled } = useAtomValue(
+    markdownServerConfigFieldsAtom(explicitEnvironmentId ?? environmentId),
   );
   const projects = useProjects();
   const [preferredEditor] = usePreferredEditor(availableEditors);
@@ -661,6 +672,7 @@ function useChatMarkdownState({
     );
   };
   const openChangeRequestLink = useOpenChangeRequestLink(threadRef, pullRequestPanelRef);
+  const openIssueLink = useOpenIssueLink(threadRef, pullRequestPanelRef, issueLinkContext);
   const openDeferredMarkdownLink = useOpenLink(threadRef);
   // Subscribe so hydrated settings apply before the anchor synchronously decides whether to intercept _blank.
   const linkTargetPreference = useClientSettings((settings) => settings.browserLinkTarget);
@@ -880,9 +892,11 @@ function useChatMarkdownState({
     cwd,
     diffThemeName,
     environmentId,
+    explicitEnvironmentId,
     expandMedia,
     fileLinkChip,
     sourceControlMedia,
+    issueLinkContext,
     renderContextReference,
     headingLevelOffset,
     imageBaseDir,
@@ -897,6 +911,7 @@ function useChatMarkdownState({
     onUseArtifactTemplate,
     onRunShellCommand,
     openChangeRequestLink,
+    openIssueLink,
     openDeferredMarkdownLink,
     openExternalLinkInPreview,
     openMarkdownMedia,
@@ -1042,11 +1057,15 @@ const CHAT_MARKDOWN_COMPONENTS = {
       canOperatePreview,
       cwd,
       environmentId,
+      expandMedia,
+      explicitEnvironmentId,
       imageBaseDir,
+      issueLinkContext,
       markdownFileLinkMetaByHref,
       threadRef,
       openMarkdownMedia,
       openChangeRequestLink,
+      openIssueLink,
       openDeferredMarkdownLink,
       linkTargetPreference,
       openExternalLinkInPreview,
@@ -1104,9 +1123,10 @@ const CHAT_MARKDOWN_COMPONENTS = {
         confirmBeforeOpen && href
           ? sourceControlClients.changeRequestUrlFromReferenceAutolink(href)
           : href;
+      const pullRequestEnvironmentId = explicitEnvironmentId ?? environmentId;
       const pullRequestPreviewTarget = pullRequestCandidateUrl
         ? resolvePullRequestPreviewTarget({
-            environmentId,
+            environmentId: pullRequestEnvironmentId,
             projects,
             pullRequestsEnabled,
             url: pullRequestCandidateUrl,
@@ -1117,9 +1137,11 @@ const CHAT_MARKDOWN_COMPONENTS = {
       const canOpenInPreview =
         canOperatePreview && Boolean(threadRef && isPreviewAvailableFor(threadRef.environmentId));
       const linkChildren = <MarkdownLinkContext value>{children}</MarkdownLinkContext>;
+      const linkedAsset = href ? linearMediaAsset(issueLinkContext, href) : null;
       const link = (
         <a
           {...props}
+          data-linear-media={linkedAsset ? JSON.stringify(linkedAsset) : undefined}
           className={cn(props.className, pullRequestAutolink === "commit" && "font-mono")}
           data-markdown-copy={pullRequestCopy}
           data-markdown-image-link={!hasText || undefined}
@@ -1145,6 +1167,20 @@ const CHAT_MARKDOWN_COMPONENTS = {
             ) {
               event.preventDefault();
               event.stopPropagation();
+              if (linkedAsset) {
+                const image =
+                  event.target instanceof HTMLImageElement
+                    ? event.target
+                    : event.currentTarget.querySelector("img");
+                const registered = image ? markdownImageItems.get(image) : undefined;
+                const selected = linkedMediaItem(linkedAsset, href, registered?.name ?? "image");
+                expandMedia(
+                  image && selected.type !== "video"
+                    ? markdownImageGallery(image, selected)
+                    : { images: [selected], index: 0 },
+                );
+                return;
+              }
               openMarkdownMedia(
                 href,
                 undefined,
@@ -1156,7 +1192,13 @@ const CHAT_MARKDOWN_COMPONENTS = {
             }
             if (
               !href ||
-              openChangeRequestLink(event, href, undefined, environmentId ?? undefined)
+              openChangeRequestLink(
+                event,
+                href,
+                undefined,
+                pullRequestEnvironmentId ?? undefined,
+              ) ||
+              openIssueLink(event, href, explicitEnvironmentId ?? environmentId ?? undefined)
             ) {
               return;
             }
@@ -1277,7 +1319,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
                 },
                 targetUrl,
                 undefined,
-                environmentId ?? undefined,
+                pullRequestEnvironmentId ?? undefined,
               )
             }
             onOpenFallback={openDeferredMarkdownLink}
@@ -1348,6 +1390,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       environmentId,
       sourceControlMedia,
       imageBaseDir,
+      issueLinkContext,
       threadRef,
       workspaceMutationId,
       renderContextReference,
@@ -1414,6 +1457,26 @@ const CHAT_MARKDOWN_COMPONENTS = {
     }
     const kind = mediaKind ?? "image";
     const directUri = imageSource._tag === "Direct" ? imageSource.uri : null;
+    const linearAsset = directUri === null ? null : linearMediaAsset(issueLinkContext, directUri);
+    if (linearAsset !== null) {
+      return (
+        <ChatMarkdownAssetImage
+          environmentId={linearAsset.environmentId}
+          resource={linearAsset.resource}
+          alt={altText}
+          kind={kind}
+          copyMarkdown={copyMarkdown}
+          standalone={standalone}
+          className={className}
+          style={authoredSizeStyle}
+          imageProps={imageProps}
+          srcFragment={markdownImageSourceFragment(classifiedSrc)}
+          originalUrl={linearAsset.resource.url}
+          framed={false}
+          onImageExpand={imageExpand}
+        />
+      );
+    }
     const hostMediaUrl =
       directUri === null
         ? null

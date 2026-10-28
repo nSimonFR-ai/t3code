@@ -5,6 +5,7 @@ import {
   type AndroidWorkspaceNavigationTab,
 } from "../features/workspace/android-workspace-tabs";
 import {
+  androidWorkspaceDestinationAnimation,
   linkedThreadStep,
   parentThreadIsBelow,
   resetAndroidWorkspace,
@@ -215,6 +216,12 @@ describe("Android workspace navigation", () => {
     expect(action?.target).toBe(root.key);
     expect(names(apply(root, action!))).toEqual(["Home"]);
   });
+});
+
+it("uses the shared split detail transition for issues without changing compact navigation", () => {
+  expect(androidWorkspaceDestinationAnimation("Issue", true)).toBe("none");
+  expect(androidWorkspaceDestinationAnimation("Issue", false)).toBeUndefined();
+  expect(androidWorkspaceDestinationAnimation("IssueCompose", true)).toBeUndefined();
 });
 
 describe("Android Settings tab", () => {

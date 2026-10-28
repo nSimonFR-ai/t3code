@@ -75,8 +75,12 @@ import Migration0069 from "./Migrations/069_ThreadMessageSearch.ts";
 import Migration0070 from "./Migrations/070_PeerLinks.ts";
 import Migration0071 from "./Migrations/071_PeerLinkFence.ts";
 import Migration0072 from "./Migrations/072_WaitingLinkRequestIndex.ts";
+import Migration0073 from "./Migrations/073_IssueTrackerBindings.ts";
+import Migration0074 from "./Migrations/074_IssueTrackerBindingHost.ts";
+import Migration0075 from "./Migrations/075_IssueTrackerAccounts.ts";
+import Migration0076 from "./Migrations/076_IssueAccountStorage.ts";
 
-const migrationEntries = [
+export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -150,6 +154,10 @@ const migrationEntries = [
   [70, "PeerLinks", Migration0070],
   [71, "PeerLinkFence", Migration0071],
   [72, "WaitingLinkRequestIndex", Migration0072],
+  [73, "IssueTrackerBindings", Migration0073],
+  [74, "IssueTrackerBindingHost", Migration0074],
+  [75, "IssueTrackerAccounts", Migration0075],
+  [76, "IssueAccountStorage", Migration0076],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -198,6 +206,80 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
   });
 });
 
+const FIRST_ISSUE_MIGRATION_ID = 73;
+const ISSUE_MIGRATION_NAMES = [
+  "IssueTrackerBindings",
+  "IssueTrackerBindingHost",
+  "IssueTrackerAccounts",
+  "IssueAccountStorage",
+];
+
+// Issues preview builds recorded these four migrations from an id main has since taken (63 or
+// 65). Moves them up to FIRST_ISSUE_MIGRATION_ID, or for a partial run just past throughId,
+// running the main migrations their ids had occupied.
+const reconcileIssueMigrations = Effect.fn("reconcileIssueMigrations")(function* (
+  throughId?: number,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const tables = yield* sql`
+        SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+      `;
+      if (tables.length === 0) return [];
+      const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+        SELECT migration_id, name FROM effect_sql_migrations
+        WHERE migration_id >= 63 ORDER BY migration_id
+      `;
+      const firstIssueId = history.find((row) => row.name === "IssueTrackerBindings")?.migration_id;
+      if (
+        firstIssueId === undefined ||
+        firstIssueId >= FIRST_ISSUE_MIGRATION_ID ||
+        (throughId !== undefined && throughId < firstIssueId)
+      ) {
+        return [];
+      }
+      const targetIssueId = Math.min(throughId ?? Infinity, FIRST_ISSUE_MIGRATION_ID - 1) + 1;
+      const issueHistory = history.filter((row) => row.migration_id >= firstIssueId);
+      if (
+        !issueHistory.every(
+          (row, index) =>
+            row.migration_id === firstIssueId + index &&
+            row.name === ISSUE_MIGRATION_NAMES[index],
+        )
+      ) {
+        return yield* new Migrator.MigrationError({
+          kind: "BadState",
+          message: "Cannot upgrade Issues preview with unexpected later migrations.",
+        });
+      }
+      yield* assertV2MigrationsCanRun(firstIssueId - 1);
+      const missing = migrationEntries.filter(
+        ([id]) => id >= firstIssueId && id < targetIssueId,
+      );
+      for (const [id, name, migration] of missing) {
+        yield* Effect.mapError(
+          migration,
+          (cause) =>
+            new Migrator.MigrationError({
+              kind: "Failed",
+              message: `Migration "${id}_${name}" failed`,
+              cause,
+            }),
+        );
+      }
+      for (const row of issueHistory.toReversed()) {
+        yield* sql`UPDATE effect_sql_migrations SET migration_id = ${row.migration_id + targetIssueId - firstIssueId}
+          WHERE migration_id = ${row.migration_id} AND name = ${row.name}`;
+      }
+      for (const [id, name] of missing) {
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
+      }
+      return missing.map(([id, name]) => [id, name] as const);
+    }),
+  );
+});
+
 const run = Migrator.make({});
 
 export interface RunMigrationsOptions {
@@ -210,11 +292,13 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+  const issueMigrations = includesV2 ? yield* reconcileIssueMigrations(toMigrationInclusive) : [];
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);
   }
   const executedMigrations = [
     ...previewMigrations,
+    ...issueMigrations,
     ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
   ];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);

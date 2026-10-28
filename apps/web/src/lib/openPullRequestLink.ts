@@ -11,7 +11,7 @@ import {
 import { useOpenLink } from "../browser/useOpenLink";
 import { useClientSettings } from "../hooks/useSettings";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
-import { useRightPanelStore } from "../rightPanelStore";
+import { PULL_REQUESTS_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readProjects, useProjects } from "../state/entities";
@@ -63,7 +63,7 @@ export function useOpenChangeRequestLink(
       url: targetUrl,
       projects: readProjects(),
       configLoaded: (environmentId) => serverConfigs.has(environmentId),
-      environmentId: resolvedThreadRef?.environmentId ?? targetEnvironmentId,
+      environmentId: targetEnvironmentId ?? resolvedThreadRef?.environmentId,
       primaryEnvironmentId,
       lendHostProject: resolvedPanelRef !== undefined,
     });
@@ -90,7 +90,7 @@ export function useOpenChangeRequestLink(
         url: targetUrl,
         number,
       });
-      if (!resolvedThreadRef) {
+      if (!resolvedThreadRef && resolvedPanelRef === PULL_REQUESTS_PANEL_REF) {
         void navigate({
           to: "/pull-requests",
           search: (previous) => ({

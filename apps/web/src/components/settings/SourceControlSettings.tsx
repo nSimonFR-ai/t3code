@@ -36,6 +36,7 @@ import { SourceControlAppSignInSettings } from "./SourceControlAppSignInSettings
 import { SourceControlTokenSettings } from "./SourceControlTokenSettings";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SourceControlWritingSettingsSection } from "./SourceControlWritingSettings";
+import { IssueTrackerSettings } from "./IssueTrackerSettings";
 import {
   SettingsPageContainer,
   SettingsSearchTarget,
@@ -517,6 +518,9 @@ export function SourceControlSettingsPanel() {
         />
       )}
 
+      {environmentId === null ? null : (
+        <IssueTrackerSettings key={environmentId} environmentId={environmentId} />
+      )}
       <SourceControlWritingSettingsSection />
     </SettingsPageContainer>
   );

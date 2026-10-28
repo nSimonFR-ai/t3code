@@ -107,6 +107,7 @@ describe("searchSettings", () => {
     const gatedIds = new Set<string>([
       "follow-change-request-templates",
       "git-fetch-interval",
+      "issue-trackers",
       "network-access",
       "publish-agent-activity",
       "provider-health-check-interval",

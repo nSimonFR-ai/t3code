@@ -161,3 +161,29 @@ describe("workspace root navigation", () => {
     expect(workspaceTabForNativeSlot(order, "removed")).toBeNull();
   });
 });
+
+it("keeps issue search and scroll separate through tab switches and late native callbacks", () => {
+  let state = initialWorkspaceTabsState();
+  state = workspaceTabsReducer(state, { type: "scroll", tab: "pullRequests", offset: 120 });
+  state = workspaceTabsReducer(state, { type: "select", tab: "issues" });
+  state = workspaceTabsReducer(state, { type: "scroll", tab: "issues", offset: 450 });
+  state = workspaceTabsReducer(state, { type: "search" });
+  state = workspaceTabsReducer(state, { type: "query", query: "ENG-7" });
+  state = workspaceTabsReducer(state, { type: "scroll", tab: "issues", offset: 30 });
+  state = workspaceTabsReducer(state, { type: "select", tab: "pullRequests" });
+  state = workspaceTabsReducer(state, { type: "expand", tab: "issues" });
+  expect(state.tabs.pullRequests).toMatchObject({
+    query: "",
+    scrollOffset: 120,
+    searchMode: "resting",
+  });
+  state = workspaceTabsReducer(state, { type: "select", tab: "issues" });
+  expect(state.tabs.issues).toMatchObject({
+    query: "ENG-7",
+    scrollOffset: 30,
+    searchEntryOffset: 450,
+    searchMode: "expanded",
+  });
+  state = workspaceTabsReducer(state, { type: "cancel" });
+  expect(state.tabs.issues).toMatchObject({ query: "", scrollOffset: 450, searchMode: "resting" });
+});

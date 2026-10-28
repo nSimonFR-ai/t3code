@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { NodeId, RunAttemptId, TrimmedNonEmptyString } from "./index.ts";
 import {
   latestProviderTurnForAttempt,
+  OrchestrationV2Command,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
@@ -19,6 +20,8 @@ import {
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
 
+const decodeOrchestrationV2Command = Schema.decodeUnknownSync(OrchestrationV2Command);
+const encodeOrchestrationV2Command = Schema.encodeSync(OrchestrationV2Command);
 const decodeOrchestrationV2TurnItemJson = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
 const encodeOrchestrationV2TurnItemJson = Schema.encodeSync(OrchestrationV2TurnItemJson);
 const decodeOrchestrationV2Subagent = Schema.decodeUnknownSync(OrchestrationV2Subagent);
@@ -35,6 +38,33 @@ const decodeOrchestrationV2ProviderCapabilities = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  it("keeps issue links compatible with clients that omit an initial snapshot", () => {
+    for (const snapshot of [
+      undefined,
+      {
+        displayKey: "#7",
+        title: "Seven",
+        state: { category: "open", name: "open" },
+        syncedAt: "2026-10-14T00:00:00.000Z",
+      },
+    ]) {
+      const wire = {
+        type: "thread.issue.link",
+        commandId: "issue-link",
+        threadId: "thread-1",
+        projectId: "project-1",
+        tracker: "github",
+        host: "github.com",
+        scope: "acme/web",
+        key: "7",
+        url: "https://github.com/acme/web/issues/7",
+        source: "agent",
+        ...(snapshot === undefined ? {} : { snapshot }),
+      };
+      expect(encodeOrchestrationV2Command(decodeOrchestrationV2Command(wire))).toEqual(wire);
+    }
+  });
+
   it("decodes thread event types from a newer server as skippable items", () => {
     const decodeWireItems = Schema.decodeUnknownSync(
       Schema.toCodecJson(Schema.Array(OrchestrationV2RpcSchemas.subscribeThread.output)),

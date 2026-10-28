@@ -3,6 +3,9 @@
  * Android but still sit above the workspace there.
  */
 const LISTED_OVERLAY_ROUTES: ReadonlySet<string> = new Set([
+  "IssueCandidates",
+  "IssueCompose",
+  "IssueCreate",
   "PullRequestReview",
   "PullRequestInlineComment",
   "ConnectOnboarding",

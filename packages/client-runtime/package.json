@@ -502,6 +502,22 @@
     "./provider-clients": {
       "types": "./src/providerClients.ts",
       "default": "./src/providerClients.ts"
+    },
+    "./state/issues": {
+      "types": "./src/state/issues.ts",
+      "default": "./src/state/issues.ts"
+    },
+    "./state/issue-trackers": {
+      "types": "./src/state/issueTrackers.ts",
+      "default": "./src/state/issueTrackers.ts"
+    },
+    "./issue-form": {
+      "types": "./src/issue-form.ts",
+      "default": "./src/issue-form.ts"
+    },
+    "./issue-pages": {
+      "types": "./src/issue-pages.ts",
+      "default": "./src/issue-pages.ts"
     }
   },
   "scripts": {
@@ -509,6 +525,7 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@effect/atom-react": "catalog:",
     "@pierre/diffs": "catalog:",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/provider-acp-registry": "workspace:*",
@@ -524,10 +541,12 @@
     "@t3tools/source-control-definitions": "workspace:*",
     "effect": "catalog:",
     "jszip": "3.10.1",
+    "react": "catalog:",
     "three": "0.180.0"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@types/react": "catalog:",
     "@types/three": "0.180.0",
     "vite-plus": "catalog:"
   }

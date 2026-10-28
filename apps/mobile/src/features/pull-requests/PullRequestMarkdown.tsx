@@ -14,7 +14,7 @@ import { changeRequestReferenceAutolinker } from "@t3tools/client-runtime/pull-r
 import type { ReferenceAutolink } from "@t3tools/client-runtime/source-control-clients";
 import { linkReferenceAutolinks } from "./pullRequestAutolinks";
 
-import { useOpenPullRequest } from "../../native/useOpenPullRequest";
+import { useOpenIssueLink } from "../../native/useOpenIssueLink";
 import { SelectableMarkdownText } from "../../native/SelectableMarkdownText";
 import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { markdownImageSources } from "../../lib/markdownImageSources";
@@ -114,9 +114,9 @@ function PullRequestMarkdownContent(props: {
   const autolinks = useContext(AutolinksContext);
   const mediaContext = useContext(PullRequestMediaContext);
   const markdown = linkReferenceAutolinks(props.markdown, autolinks);
-  const openPullRequest = useOpenPullRequest();
+  const openIssueLink = useOpenIssueLink();
   const openLink = (href: string) => {
-    void openPullRequest(href);
+    void openIssueLink(href);
   };
   const gallery: FilePreviewItem[] = markdownImageSources(
     props.imageGroupMarkdown ?? props.markdown,

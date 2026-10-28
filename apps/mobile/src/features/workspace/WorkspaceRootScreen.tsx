@@ -36,8 +36,10 @@ import { WorkspaceToolbar } from "./WorkspaceToolbar";
 import {
   WORKSPACE_DOCK,
   workspaceDockBottomClearance,
+  WORKSPACE_SEARCH_LABELS,
   workspaceToolbarHeight,
 } from "./workspace-tabs-state";
+import { IssuesScreen } from "../issues/IssuesScreen";
 import { WorkspaceSidebarTabs } from "./WorkspaceSidebarTabs";
 import {
   useCompactWorkspaceTabs,
@@ -171,11 +173,10 @@ function WorkspaceRootContent() {
             title="T3 Code"
             titleContent={renderHeaderTitle()}
             actions={[
-              ...(state.selectedTab === "threads" || state.selectedTab === "pullRequests"
+              ...(state.selectedTab !== "usage"
                 ? [
                     {
-                      accessibilityLabel:
-                        state.selectedTab === "threads" ? "Search threads" : "Search pull requests",
+                      accessibilityLabel: WORKSPACE_SEARCH_LABELS[state.selectedTab],
                       icon: "magnifyingglass" as const,
                       onPress: () => {
                         dispatchHardwareKeyboardCommand("focusSearch");
@@ -204,6 +205,8 @@ function WorkspaceRootContent() {
             <HomeRouteScreen />
           ) : state.selectedTab === "pullRequests" ? (
             <PullRequestsScreen />
+          ) : state.selectedTab === "issues" ? (
+            <IssuesScreen />
           ) : (
             <WorkspaceExtraTab tab={state.selectedTab} />
           )}
@@ -215,7 +218,7 @@ function WorkspaceRootContent() {
         {enabled.length === 0 && !settingsOpen ? null : (
             settingsOpen
               ? Platform.OS === "ios"
-              : state.selectedTab === "threads" || state.selectedTab === "pullRequests"
+              : state.selectedTab !== "usage"
           ) ? (
           <WorkspaceToolbar sidebar={sidebarNavigation} onNewTask={startNewTask} />
         ) : (

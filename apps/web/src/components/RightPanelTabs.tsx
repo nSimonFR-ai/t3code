@@ -26,6 +26,7 @@ import { restrictToFirstScrollableAncestor, restrictToHorizontalAxis } from "@dn
 import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  CircleDotIcon,
   Smartphone,
   ChevronDown,
   ChevronLeft,
@@ -92,6 +93,7 @@ import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
+import { issueDisplayLabel } from "./issue/issueDetail.logic";
 
 export interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -128,6 +130,7 @@ export interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
+  onAddIssues?: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -135,6 +138,7 @@ export interface RightPanelTabsProps {
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
+  issuesAvailable?: boolean;
   deviceAvailable: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
@@ -161,6 +165,7 @@ const SURFACE_DISABLED_REASONS = {
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
   pullRequests: "No linked pull requests are available for this thread.",
+  issues: "Issues need an environment that supports issue tracking.",
   device: "Devices are only available from a thread.",
 } as const;
 
@@ -185,6 +190,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   diff: "Available for Git repositories.",
   pullRequest: "No pull request on this branch yet.",
   pullRequests: "No linked pull requests available.",
+  issues: "Available when the server supports issues.",
   device: "Available from a thread.",
 } as const;
 
@@ -302,6 +308,7 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
+  onAddIssues: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -309,6 +316,7 @@ function RightPanelEmptyState(props: {
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
+  issuesAvailable: boolean;
   deviceAvailable: boolean;
 }) {
   const [highlight, setHighlight] = useState(-1);
@@ -361,6 +369,14 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestsAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequests,
       onClick: props.onAddPullRequests,
+    },
+    {
+      label: "Linked issues",
+      icon: CircleDotIcon,
+      shortcut: "I",
+      available: props.issuesAvailable,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.issues,
+      onClick: props.onAddIssues,
     },
     {
       label: "Device",
@@ -554,6 +570,10 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "pull-requests":
       return "Pull requests";
+    case "issues":
+      return "Issues";
+    case "issue":
+      return issueDisplayLabel(surface.scope, surface.key);
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
@@ -644,6 +664,9 @@ function SurfaceIcon({
       );
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
+    case "issues":
+    case "issue":
+      return <CircleDotIcon className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -1058,6 +1081,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddPullRequests,
     },
     {
+      label: "Linked issues",
+      icon: CircleDotIcon,
+      shortcut: "I",
+      available: props.issuesAvailable === true && props.onAddIssues !== undefined,
+      disabledReason: SURFACE_DISABLED_REASONS.issues,
+      onClick: () => props.onAddIssues?.(),
+    },
+    {
       label: "Device",
       icon: Smartphone,
       shortcut: "M",
@@ -1438,6 +1469,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
+            onAddIssues={() => props.onAddIssues?.()}
             onAddDevice={props.onAddDevice}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
@@ -1445,6 +1477,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             pullRequestsAvailable={props.pullRequestsAvailable}
+            issuesAvailable={props.issuesAvailable === true && props.onAddIssues !== undefined}
             deviceAvailable={props.deviceAvailable}
           />
         ) : (

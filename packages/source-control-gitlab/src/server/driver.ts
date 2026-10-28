@@ -12,7 +12,7 @@ import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import * as GitLabPullRequestProvider from "./GitLabPullRequestProvider.ts";
 import * as GitLabSourceControlProvider from "./GitLabSourceControlProvider.ts";
 
-const services = GitLabPullRequestCli.layer.pipe(Layer.provideMerge(GitLabCli.layer));
+export const services = GitLabPullRequestCli.layer.pipe(Layer.provideMerge(GitLabCli.layer));
 
 const makeInstance = Effect.all({
   sourceControl: GitLabSourceControlProvider.make,
