@@ -151,13 +151,13 @@ describe("Issues preview upgrade", () => {
           migrationManifest,
         );
         const shiftedHistory = yield* sql`SELECT migration_id, name, created_at
-          FROM effect_sql_migrations WHERE migration_id BETWEEN 73 AND ${throughId + 73 - startId}
+          FROM effect_sql_migrations WHERE migration_id BETWEEN 78 AND ${throughId + 78 - startId}
           ORDER BY migration_id`;
         assert.deepStrictEqual(
           shiftedHistory,
           oldHistory.map((row) => ({
             ...row,
-            migration_id: row.migration_id + 73 - startId,
+            migration_id: row.migration_id + 78 - startId,
           })),
         );
         const bindings = yield* sql`SELECT * FROM issue_tracker_bindings`;

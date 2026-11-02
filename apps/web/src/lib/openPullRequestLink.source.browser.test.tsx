@@ -2,7 +2,6 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, IssueTrackerKind, ProjectId, ThreadId } from "@t3tools/contracts";
-import { changeRequestReferenceAutolinker } from "@t3tools/client-runtime/pull-request-markdown";
 
 const state = vi.hoisted(() => ({
   read: vi.fn(),
@@ -137,6 +136,7 @@ vi.mock("../remoteOpen", async (importOriginal) => ({
 
 import { PullRequestCommentBody } from "../components/pullRequest/PullRequestCommentBody";
 import { PullRequestMarkdownContext } from "../components/pullRequest/PullRequestMarkdown";
+import { pullRequestAutolinkPlugins } from "../components/pullRequest/pullRequestMarkdown.logic";
 import { IssueCommentContent } from "../components/issue/IssueConversation";
 import ChatMarkdown from "../components/ChatMarkdown";
 import { PullRequestMarkdownEditor } from "../components/pullRequest/PullRequestMarkdownEditor";
@@ -210,10 +210,11 @@ async function show(surface: string, text = `[PR 42](${url})`, standaloneIssue =
       ) : (
         <PullRequestMarkdownContext
           value={{
-            autolinks: changeRequestReferenceAutolinker({
+            remarkPlugins: pullRequestAutolinkPlugins({
               provider: "github",
               url: "https://github.com/acme/repo/pull/1",
             }),
+            lineBreaks: false,
             threadRef: owner,
           }}
         >

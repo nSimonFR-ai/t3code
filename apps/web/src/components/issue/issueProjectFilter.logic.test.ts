@@ -2,7 +2,7 @@ import { EnvironmentId, IssueCapabilities, IssueTrackerKind, ProjectId } from "@
 import { describe, expect, it } from "vite-plus/test";
 import { continueIssueListPage } from "@t3tools/client-runtime/state/issues";
 
-import { pullRequestFilterProjects } from "../pullRequest/pullRequestProjectFilter.logic";
+import { pullRequestFilterProjects } from "@t3tools/client-runtime/pull-request-project-filter";
 import {
   issueCreateSources,
   issueFilterProjects,

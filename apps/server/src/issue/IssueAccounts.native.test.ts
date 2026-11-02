@@ -621,9 +621,9 @@ it.effect(
       yield* f.bind("A", a.connectionId);
       yield* f.bind("A", b.connectionId);
       f.requests.length = 0;
+      // A ref without an account reads through the project's only source (spec R1.5).
       for (const ref of [
         f.ref("A", a.connectionId),
-        f.ref("A"),
         f.ref("A", "missing"),
         { ...f.ref("A", b.connectionId), host: "foreign.test" },
         { ...f.ref("A", b.connectionId), scope: "other/ENG" },

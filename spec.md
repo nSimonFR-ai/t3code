@@ -4,7 +4,7 @@ What this fork (`nSimonFR-ai/t3code`, branch `nicos/issues-nightly-<version>`) c
 
 Requirements use MUST / SHOULD. Each section ends with where the change lives and how it's checked, so the next rebase onto a newer nightly can carry it forward or drop it on purpose.
 
-Current base: `v0.1.4-nightly.20261028.3814` + pingdotgg/t3code#19576 at `4b44b92`.
+Current base: `v0.1.7-nightly.20261102.4080` (pingdotgg/t3code `main` at `47f2c8d29e`) + pingdotgg/t3code#19576 at `4b44b92`.
 
 ## 1. Issues stack
 
@@ -20,12 +20,12 @@ Where: merge commit on the branch, plus the follow-up port commit. Check: web, s
 
 ## 2. Database migrations
 
-- R2.1 The issue migrations MUST be numbered after upstream's highest migration (73–76 at nightly 3814). On every rebase, recheck upstream's highest id and move the issue block past it.
-- R2.2 Databases written by #19576 preview builds, which recorded the issue block at 63, 65 or 67, MUST be moved to the new ids. Any upstream migrations those ids shadowed MUST run.
+- R2.1 The issue migrations MUST be numbered after upstream's highest migration (78–81 at nightly 4080, after upstream's 77). On every rebase, recheck upstream's highest id and move the issue block past it.
+- R2.2 Databases written by #19576 preview builds (issue block at 63, 65 or 67) or by the 0.1.4 fork builds (issue block at 73–76) MUST be moved to the new ids. Any upstream migrations those ids shadowed MUST run (upstream's 73–77 for the 0.1.4 builds).
 - R2.3 Databases written by the earlier fork builds (ledger rows `62 ProjectionThreadIssues`, `63 WorkItemLinks`) MUST start cleanly. The server retires those two rows, drops the unused `work_item_links` table and `projection_threads.issue_links_json` column, then runs upstream's 62+ and the issue migrations.
 - R2.4 Back up `statev2.sqlite` on both hosts before deploying. New migrations can't be rolled back.
 
-Where: `apps/server/src/persistence/Migrations.ts` (`reconcileIssueMigrations`, `retireForkIssueStackMigrations`). Check: `reconcileV2PreviewMigration.test.ts`, plus a migration run against copies of the Mac's and the rpi5's databases.
+Where: `apps/server/src/persistence/Migrations.ts` (`reconcileIssueMigrations`, `retireForkIssueStackMigrations`). Check: `reconcileV2PreviewMigration.test.ts` (preview starts 63, 65 and 73), plus a migration run against copies of the Mac's and the rpi5's databases.
 
 ## 3. Linear accounts from earlier builds
 
@@ -74,6 +74,12 @@ Where: `apps/web/src/rightPanelStore.ts`, `closedViewStore.ts` (`merge`), `compo
 - R7.4 Mac app: the official app with `app.asar`'s `apps/server/dist` replaced, the same unpacked files, the asar integrity hash updated, `app-update.yml` removed, and an ad-hoc signature. It MUST NOT update itself back to the official nightly.
 - R7.5 linux-arm64: the official archive with `t3` and `client/` replaced. `t3` is a Node SEA built on a 16 KiB-page arm64 host (the rpi5) with Node = root `engines.node` plus postject.
 - R7.6 Before release: run `t3 --version` on both builds, and boot the rpi5 build once on an empty home.
+
+## 8. Claude artifact watchers
+
+- R8.1 A Claude thread that published an Artifact MUST settle once its turn ends. Claude Code's session-long live-updates watcher (`task_started` with `task_type: "monitor_ws"`, `ambient: true`) MUST NOT be projected as a subagent or as Waiting work. Ambient subagents stay subagents.
+
+Where: `isClaudeAmbientTaskStarted` and `handleSdkMessage` in `apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts`. Check: "does not keep the thread busy for Claude's ambient artifact watch" in `ClaudeAdapterV2.test.ts`. Upstream: pingdotgg/t3code#29331 (fixes #13978). Drop this section once upstream merges it.
 
 ## Dropped
 

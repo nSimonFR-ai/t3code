@@ -634,7 +634,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       },
     ) =>
       input.cursor === undefined
-        ? Effect.succeed<string | undefined>(undefined)
+        ? Effect.undefined
         : decodeActivityCursor(input.cursor).pipe(
             Effect.filterOrFail(
               ([identity, cursor]) =>

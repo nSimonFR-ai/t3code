@@ -209,9 +209,7 @@ function WorkspaceRootContent() {
         ) : null}
         {/* Android's Settings list carries its own search in its app bar. */}
         {enabled.length === 0 && !settingsOpen ? null : (
-            settingsOpen
-              ? Platform.OS === "ios"
-              : state.selectedTab !== "usage"
+            settingsOpen ? Platform.OS === "ios" : state.selectedTab !== "usage"
           ) ? (
           <WorkspaceToolbar sidebar={sidebarNavigation} onNewTask={startNewTask} />
         ) : (

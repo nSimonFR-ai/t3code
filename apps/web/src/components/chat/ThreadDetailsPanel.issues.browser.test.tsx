@@ -151,6 +151,7 @@ const props: ThreadDetailsPanelProps = {
   onAddProjectScript: vi.fn(),
   onUpdateProjectScript: vi.fn(),
   onDeleteProjectScript: vi.fn(),
+  usage: { providerInstanceId: null, providers: [], sources: [], contextWindow: null },
 };
 let element: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;

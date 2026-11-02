@@ -618,7 +618,9 @@ function IssuesRoute() {
           (p) => p.environmentId === environmentId && p.id === error.projectId,
         );
         const kind = project?.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
-        const host = kind ? sourceControlClients.changeRequestHost(project?.repositoryIdentity, kind) : null;
+        const host = kind
+          ? sourceControlClients.changeRequestHost(project?.repositoryIdentity, kind)
+          : null;
         const group =
           (error.tracker && error.host
             ? groupOf(error.tracker, error.host, error.connectionId)

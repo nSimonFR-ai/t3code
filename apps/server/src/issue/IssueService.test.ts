@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
@@ -259,6 +260,12 @@ function makeService(input: {
   });
 }
 
+// RepositoryIdentityResolver reads the folder and its .git entry before running git.
+const repositoryFolderFileSystem = FileSystem.makeNoop({
+  stat: () => Effect.succeed({ type: "Directory" } as FileSystem.File.Info),
+  exists: (path) => Effect.succeed(path.endsWith("/.git")),
+});
+
 describe("resolveGitHostBinding", () => {
   it.effect.each([
     { name: "SSH root", remote: "git@forgejo.test:acme/web.git", base: "https://forgejo.test" },
@@ -319,6 +326,7 @@ describe("resolveGitHostBinding", () => {
             },
           }),
       }).pipe(
+        Effect.provideService(FileSystem.FileSystem, repositoryFolderFileSystem),
         Effect.provide(
           Layer.mock(ProcessRunner.ProcessRunner)({
             run: (input) =>
@@ -415,6 +423,7 @@ describe("resolveGitHostBinding", () => {
       expect(native).toHaveLength(before);
     }).pipe(
       Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provide(Path.layer),
       Effect.provideService(
         FileSystem.FileSystem,
         FileSystem.makeNoop({ exists: () => Effect.succeed(false) }),
@@ -3065,6 +3074,7 @@ it.effect("keeps native Forgejo involvement viewers separate across case-distinc
             ),
         }),
     }).pipe(
+      Effect.provideService(FileSystem.FileSystem, repositoryFolderFileSystem),
       Effect.provide(
         Layer.mock(ProcessRunner.ProcessRunner)({
           run: (input) => {
@@ -3163,6 +3173,7 @@ it.effect("keeps native Forgejo involvement viewers separate across case-distinc
     }
   }).pipe(
     Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provide(Path.layer),
     Effect.provideService(HostProcess.HomeDirectory, "/fake-home"),
     Effect.provideService(
       FileSystem.FileSystem,

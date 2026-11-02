@@ -465,7 +465,10 @@ export const layerAssetRoute = Layer.unwrap(
             Effect.orElseSucceed(() =>
               HttpServerResponse.empty({
                 status: 502,
-                headers: { "cache-control": "private, no-store", "x-content-type-options": "nosniff" },
+                headers: {
+                  "cache-control": "private, no-store",
+                  "x-content-type-options": "nosniff",
+                },
               }),
             ),
           );

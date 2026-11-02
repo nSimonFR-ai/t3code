@@ -98,6 +98,7 @@ const surfaceProps = {
     onOpenFile: vi.fn(),
     onPendingChange: vi.fn(),
   },
+  sideChatParentPanel: { openToolDiff: vi.fn(), runShellCommand: vi.fn() },
 } satisfies Omit<ComponentProps<typeof RightPanelSurfaceContent>, "surface" | "environmentById">;
 let element: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
