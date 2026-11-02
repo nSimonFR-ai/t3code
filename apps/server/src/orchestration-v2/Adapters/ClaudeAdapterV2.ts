@@ -2927,6 +2927,27 @@ function claudeTaskTypeFromSdkMessage(message: SDKMessage): string | null {
   return typeof taskType === "string" ? taskType : null;
 }
 
+// Claude's own session-long socket watchers (e.g. the live-updates socket it
+// arms on an Artifact publish) run until the session ends. They are neither
+// subagents nor work the thread waits on. Ambient subagents stay subagents.
+function isClaudeAmbientTaskStarted(message: SDKMessage): boolean {
+  return (
+    message.type === "system" &&
+    message.subtype === "task_started" &&
+    Reflect.get(message, "ambient") === true &&
+    claudeTaskTypeFromSdkMessage(message) === "monitor_ws"
+  );
+}
+
+// Task frames after task_started carry only the task id.
+function claudeTaskIdFromSdkMessage(message: SDKMessage): string | null {
+  if (message.type !== "system") {
+    return null;
+  }
+  const taskId = Reflect.get(message, "task_id");
+  return typeof taskId === "string" ? taskId : null;
+}
+
 function isClaudeNonSubagentTask(message: SDKMessage): boolean {
   return isClaudeOpaqueBackgroundTaskType(claudeTaskTypeFromSdkMessage(message));
 }
@@ -4897,6 +4918,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const backgroundedSubagentTaskIds = yield* Ref.make<ReadonlySet<string>>(new Set());
         // Nested subagent completions notify their owner and never wake the root.
         const nestedSubagentTaskIds = yield* Ref.make<ReadonlySet<string>>(new Set());
+        // Ambient tasks (see isClaudeAmbientTaskStarted); their frames are dropped.
+        const ambientTaskIds = yield* Ref.make<ReadonlySet<string>>(new Set());
         const isNestedSubagentTask = (taskId: string) =>
           Ref.get(nestedSubagentTaskIds).pipe(Effect.map((ids) => ids.has(taskId)));
         const recordWakeReport = (
@@ -9582,6 +9605,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly message: SDKMessage;
         }) {
           const message = input.message;
+          if (isClaudeAmbientTaskStarted(message)) {
+            const taskId = claudeTaskIdFromSdkMessage(message);
+            if (taskId !== null) {
+              yield* Ref.update(ambientTaskIds, (current) => new Set(current).add(taskId));
+            }
+            return;
+          }
+          const taskId = claudeTaskIdFromSdkMessage(message);
+          if (taskId !== null && (yield* Ref.get(ambientTaskIds)).has(taskId)) {
+            return;
+          }
           const context = yield* Ref.get(activeTurn);
           const liveQuery = yield* Ref.get(queryContext);
           if (
