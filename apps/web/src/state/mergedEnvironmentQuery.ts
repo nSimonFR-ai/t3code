@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
-import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -36,7 +35,7 @@ export function createMergedEnvironmentQuery<Input, A>(
         if (result._tag === "Failure" && error === null) {
           error = formatEnvironmentQueryError(result.cause);
         }
-        const value = Option.getOrNull(AsyncResult.value(result));
+        const value = AsyncResult.getOrElse(result, () => null);
         if (value !== null) values.push([target.environmentId, value]);
       }
       return { values, error, isPending };

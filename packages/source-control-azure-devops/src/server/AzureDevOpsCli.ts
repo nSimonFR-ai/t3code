@@ -637,9 +637,18 @@ export const make = Effect.gen(function* () {
       );
     }),
     getRepositoryCloneUrls: Effect.fn("AzureDevOpsCli.getRepositoryCloneUrls")(function (input) {
+      const repository = parseRepositorySpecifier(input.repository);
       return executeJson(execute, {
         cwd: input.cwd,
-        args: ["repos", "show", "--detect", "true", "--repository", input.repository],
+        args: [
+          "repos",
+          "show",
+          "--detect",
+          "true",
+          "--repository",
+          repository.name,
+          ...(repository.project ? ["--project", repository.project] : []),
+        ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>

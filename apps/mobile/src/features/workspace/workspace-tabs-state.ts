@@ -116,6 +116,15 @@ export const WORKSPACE_SEARCH_LABELS = {
   settings: "Search settings",
 } as const satisfies Readonly<Record<Exclude<WorkspaceSearchTab, "usage">, string>>;
 
+/**
+ * iOS 27's integrated search X closes the field with only a blur, leaving `expanded`.
+ * An empty one has nothing to restore, except where the caller keeps it open (the Duo).
+ */
+export function shouldRestoreNativeSearch(tab: WorkspaceTabState, keepsEmptySearchOpen: boolean) {
+  if (tab.searchMode === "resting") return false;
+  return tab.searchMode === "active" || tab.query !== "" || keepsEmptySearchOpen;
+}
+
 export const WORKSPACE_TOOLBAR = { height: 48, expandedGap: 10, edge: 16, gap: 8 };
 export const WORKSPACE_DOCK = { height: 48, tabsWidth: 252, gap: 12, bottomGap: 6 };
 

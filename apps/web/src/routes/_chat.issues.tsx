@@ -80,7 +80,7 @@ import {
   pullRequestProjectKey,
   type PullRequestFilterOption,
 } from "~/components/pullRequest/PullRequestListFilters";
-import { pullRequestFilterProjects } from "~/components/pullRequest/pullRequestProjectFilter.logic";
+import { pullRequestFilterProjects } from "@t3tools/client-runtime/pull-request-project-filter";
 import { PullRequestsUnavailableState } from "~/components/pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs } from "~/components/RightPanelTabs";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "~/components/WorkspaceBreadcrumb";

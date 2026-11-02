@@ -9,10 +9,10 @@ import { migrationManifest, runMigrations } from "./Migrations.ts";
 import PullRequestFilesViewed from "./Migrations/053_PullRequestFilesViewed.ts";
 import RemoveRedundantProjectionIndexes from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
-import IssueTrackerBindings from "./Migrations/073_IssueTrackerBindings.ts";
-import IssueTrackerBindingHost from "./Migrations/074_IssueTrackerBindingHost.ts";
-import IssueTrackerAccounts from "./Migrations/075_IssueTrackerAccounts.ts";
-import IssueAccountStorage from "./Migrations/076_IssueAccountStorage.ts";
+import IssueTrackerBindings from "./Migrations/078_IssueTrackerBindings.ts";
+import IssueTrackerBindingHost from "./Migrations/079_IssueTrackerBindingHost.ts";
+import IssueTrackerAccounts from "./Migrations/080_IssueTrackerAccounts.ts";
+import IssueAccountStorage from "./Migrations/081_IssueAccountStorage.ts";
 
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -53,7 +53,7 @@ const seedIssuePreview = Effect.fnUntraced(function* (throughId: number, startId
 
 describe("Issues preview upgrade", () => {
   it.effect.each(
-    [63, 65].flatMap((startId) =>
+    [63, 65, 73].flatMap((startId) =>
       [0, 1, 2, 3].map((offset) => ({ startId, throughId: startId + offset })),
     ),
   )(
@@ -350,10 +350,15 @@ describe("V2 preview upgrade", () => {
         [70, "PeerLinks"],
         [71, "PeerLinkFence"],
         [72, "WaitingLinkRequestIndex"],
-        [73, "IssueTrackerBindings"],
-        [74, "IssueTrackerBindingHost"],
-        [75, "IssueTrackerAccounts"],
-        [76, "IssueAccountStorage"],
+        [73, "ActiveTurnItemIndexes"],
+        [74, "ExcludeAttachmentPlaceholdersFromSearch"],
+        [75, "SubagentDeliveryState"],
+        [76, "ProjectionProjectsPinArchive"],
+        [77, "RepairBooleanSettledOverride"],
+        [78, "IssueTrackerBindings"],
+        [79, "IssueTrackerBindingHost"],
+        [80, "IssueTrackerAccounts"],
+        [81, "IssueAccountStorage"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -449,10 +454,15 @@ describe("V2 preview upgrade", () => {
         [70, "PeerLinks"],
         [71, "PeerLinkFence"],
         [72, "WaitingLinkRequestIndex"],
-        [73, "IssueTrackerBindings"],
-        [74, "IssueTrackerBindingHost"],
-        [75, "IssueTrackerAccounts"],
-        [76, "IssueAccountStorage"],
+        [73, "ActiveTurnItemIndexes"],
+        [74, "ExcludeAttachmentPlaceholdersFromSearch"],
+        [75, "SubagentDeliveryState"],
+        [76, "ProjectionProjectsPinArchive"],
+        [77, "RepairBooleanSettledOverride"],
+        [78, "IssueTrackerBindings"],
+        [79, "IssueTrackerBindingHost"],
+        [80, "IssueTrackerAccounts"],
+        [81, "IssueAccountStorage"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

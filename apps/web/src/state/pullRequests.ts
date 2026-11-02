@@ -552,7 +552,7 @@ export function usePullRequestTurnRefreshes(
 
 export function usePullRequestTurnRefresh(environmentId: EnvironmentId): number | null {
   const result = useAtomValue(pullRequestEnvironment.refreshes({ environmentId, input: {} }));
-  return Option.getOrNull(AsyncResult.value(result));
+  return AsyncResult.getOrElse(result, () => null);
 }
 
 export interface MergedPullRequestListView {
