@@ -9614,6 +9614,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
           const taskId = claudeTaskIdFromSdkMessage(message);
           if (taskId !== null && (yield* Ref.get(ambientTaskIds)).has(taskId)) {
+            // task_notification is a task's last frame.
+            if (message.type === "system" && message.subtype === "task_notification") {
+              yield* Ref.update(ambientTaskIds, (current) => {
+                const next = new Set(current);
+                next.delete(taskId);
+                return next;
+              });
+            }
             return;
           }
           const context = yield* Ref.get(activeTurn);
