@@ -12,7 +12,7 @@ import * as Layer from "effect/Layer";
 it.effect("preserves old rows and keeps one native binding per tracker on the same project", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 78 });
+    yield* runMigrations({ toMigrationInclusive: 81 });
     yield* sql`INSERT INTO issue_tracker_bindings (project_id, tracker, scope, updated_at)
       VALUES ('project', 'linear', 'acme/ENG', '2026-10-14T00:00:00Z')`;
     yield* runMigrations();

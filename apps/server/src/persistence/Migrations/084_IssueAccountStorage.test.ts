@@ -65,7 +65,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 80 });
+      yield* runMigrations({ toMigrationInclusive: 83 });
       yield* sql`INSERT INTO issue_tracker_accounts VALUES ('linear', 'Account', 'linear.app', 'native-B')`;
       yield* sql`INSERT INTO issue_tracker_bindings VALUES ('project', 'linear', 'acme/ENG', 'linear.app', 'Account', ${now})`;
       yield* sql`INSERT INTO issue_tracker_bindings VALUES ('default', 'linear', 'acme/ENG', 'linear.app', NULL, ${now})`;
