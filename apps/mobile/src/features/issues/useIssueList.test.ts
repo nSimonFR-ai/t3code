@@ -1,3 +1,4 @@
+// @effect-diagnostics globalErrorInEffectFailure:off allOfMapToForEach:off - plain errors exercise error paths; the targets run together.
 import { makeIssueListEntry } from "./issue-test-fixtures";
 import { createIssueTestHook } from "./issue-testkit";
 import {

@@ -1,3 +1,4 @@
+// @effect-diagnostics globalErrorInEffectFailure:off anyUnknownInErrorContext:off - the mocked RPC answers with plain errors.
 import { createIssueTestHook } from "../features/issues/issue-testkit";
 import {
   AuthOrchestrationReadScope,

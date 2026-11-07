@@ -1,3 +1,4 @@
+// @effect-diagnostics globalErrorInEffectFailure:off - the tests fail the effect with plain errors to exercise error paths.
 import { makeIssueDetail } from "./issue-test-fixtures";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
