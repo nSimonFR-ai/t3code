@@ -1,3 +1,4 @@
+// @effect-diagnostics schemaClassObjectLiteral:off - the tests stub the supervisor target with a bare object.
 import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";

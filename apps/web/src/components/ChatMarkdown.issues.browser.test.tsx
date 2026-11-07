@@ -1,3 +1,4 @@
+// @effect-diagnostics schemaClassObjectLiteral:off - the tests stub the supervisor target with a bare object.
 import {
   AuthStandardClientScopes,
   EnvironmentId,
