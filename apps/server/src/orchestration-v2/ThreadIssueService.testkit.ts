@@ -8,6 +8,8 @@ import type {
 } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -100,6 +102,7 @@ export const issueRuntimeLayer = (prefix: string) => {
       }),
     ),
     Layer.provide(platform),
+    Layer.provide(Layer.merge(SecureRandom.layerWebCrypto, Digest.layerWebCrypto)),
   );
 };
 

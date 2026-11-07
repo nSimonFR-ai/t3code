@@ -2,7 +2,7 @@ import type { IssueInvolvement, IssueListState, IssueTrackerSummary } from "@t3t
 import { ScrollView } from "react-native";
 import { Chip } from "../../components/ui/Chip";
 import type { IssueListFilters as Controls } from "../../persistence/mobile-preferences";
-import { ListFilterMenu } from "../workspace/ListFilterMenu";
+import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
 
 const STATES = { open: "Open", closed: "Closed", all: "All states" } as const;
 const INVOLVEMENT = {

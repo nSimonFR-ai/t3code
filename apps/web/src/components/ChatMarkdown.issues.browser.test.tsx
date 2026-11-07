@@ -255,6 +255,7 @@ describe("pull request Markdown issue destinations", () => {
           <AppAtomRegistryProvider>
             {surface === "editor preview" ? (
               <PullRequestMarkdownEditor
+                completionScope={null}
                 {...props}
                 value={text}
                 label="Description"

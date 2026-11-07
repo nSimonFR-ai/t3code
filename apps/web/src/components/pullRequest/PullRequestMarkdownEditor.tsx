@@ -10,14 +10,18 @@ import type { IssueLinkContext } from "~/lib/openIssueLink";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 
 import { Button } from "../ui/button";
-import { Textarea } from "../ui/textarea";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import {
+  PullRequestMarkdownTextarea,
+  type PullRequestCompletionScope,
+} from "./PullRequestMarkdownTextarea";
 
 export function PullRequestMarkdownEditor({
   value,
   cwd,
   environmentId,
+  completionScope,
   threadRef = null,
   issueLinkContext,
   pullRequestPanelRef,
@@ -32,6 +36,7 @@ export function PullRequestMarkdownEditor({
   readonly value: string;
   readonly cwd: string;
   readonly environmentId: EnvironmentId;
+  readonly completionScope: PullRequestCompletionScope | null;
   readonly threadRef?: ScopedThreadRef | null;
   readonly issueLinkContext?: IssueLinkContext | undefined;
   readonly pullRequestPanelRef?: ScopedThreadRef | undefined;
@@ -109,14 +114,15 @@ export function PullRequestMarkdownEditor({
           )}
         </div>
       ) : (
-        <Textarea
+        <PullRequestMarkdownTextarea
           autoFocus
           disabled={saving}
+          completionScope={completionScope}
           value={draft}
           rows={6}
           placeholder={placeholder}
           aria-label={label}
-          onChange={(event) => setDraft(event.target.value)}
+          onValueChange={setDraft}
         />
       )}
       <div className="flex justify-end gap-2">

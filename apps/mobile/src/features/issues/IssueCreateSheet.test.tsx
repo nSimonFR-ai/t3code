@@ -62,7 +62,7 @@ vi.mock("../../components/ui/AppText", () => ({
 }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../components/ui/Button", () => ({ Button: harness.capture("label") }));
-vi.mock("../workspace/ListFilterMenu", () => ({
+vi.mock("../layout/workspace/ListFilterMenu", () => ({
   ListFilterMenu: harness.capture("accessibilityLabel"),
 }));
 vi.mock("../pull-requests/PullRequestSheetContent", () => ({

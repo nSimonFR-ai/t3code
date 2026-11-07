@@ -80,10 +80,13 @@ import Migration0074 from "./Migrations/074_ExcludeAttachmentPlaceholdersFromSea
 import Migration0075 from "./Migrations/075_SubagentDeliveryState.ts";
 import Migration0076 from "./Migrations/076_ProjectionProjectsPinArchive.ts";
 import Migration0077 from "./Migrations/077_RepairBooleanSettledOverride.ts";
-import Migration0078 from "./Migrations/078_IssueTrackerBindings.ts";
-import Migration0079 from "./Migrations/079_IssueTrackerBindingHost.ts";
-import Migration0080 from "./Migrations/080_IssueTrackerAccounts.ts";
-import Migration0081 from "./Migrations/081_IssueAccountStorage.ts";
+import Migration0078 from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
+import Migration0079 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
+import Migration0080 from "./Migrations/080_ScheduledTaskThreadMode.ts";
+import Migration0081 from "./Migrations/081_IssueTrackerBindings.ts";
+import Migration0082 from "./Migrations/082_IssueTrackerBindingHost.ts";
+import Migration0083 from "./Migrations/083_IssueTrackerAccounts.ts";
+import Migration0084 from "./Migrations/084_IssueAccountStorage.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -164,10 +167,13 @@ export const migrationEntries = [
   [75, "SubagentDeliveryState", Migration0075],
   [76, "ProjectionProjectsPinArchive", Migration0076],
   [77, "RepairBooleanSettledOverride", Migration0077],
-  [78, "IssueTrackerBindings", Migration0078],
-  [79, "IssueTrackerBindingHost", Migration0079],
-  [80, "IssueTrackerAccounts", Migration0080],
-  [81, "IssueAccountStorage", Migration0081],
+  [78, "DropOrchestrationEventCorrelationIndex", Migration0078],
+  [79, "DelegatedRecoveryIndexes", Migration0079],
+  [80, "ScheduledTaskThreadMode", Migration0080],
+  [81, "IssueTrackerBindings", Migration0081],
+  [82, "IssueTrackerBindingHost", Migration0082],
+  [83, "IssueTrackerAccounts", Migration0083],
+  [84, "IssueAccountStorage", Migration0084],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -216,7 +222,7 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
   });
 });
 
-const FIRST_ISSUE_MIGRATION_ID = 78;
+const FIRST_ISSUE_MIGRATION_ID = 81;
 const ISSUE_MIGRATION_NAMES = [
   "IssueTrackerBindings",
   "IssueTrackerBindingHost",

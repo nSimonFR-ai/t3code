@@ -61,6 +61,11 @@ const THREAD_ID = ThreadId.make("thread-1");
 const GITHUB = IssueTrackerKind.make("github");
 const LINEAR = IssueTrackerKind.make("linear");
 const decodeUnlinkKey = Schema.decodeSync(ThreadIssueKey);
+class ToolParametersEncodeError extends Schema.TaggedError<ToolParametersEncodeError>()(
+  "ToolParametersEncodeError",
+  { cause: Schema.Defect() },
+) {}
+
 const encodeIssueTools = Object.fromEntries(
   Object.entries(IssuesToolkit.tools).map(([name, tool]) => [
     name,
@@ -412,7 +417,10 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     capabilities: ReadonlyArray<McpInvocationContext.McpCapability> = ["issues"],
     external = false,
   ) =>
-    Effect.try(() => encodeIssueTools[name]!(params)).pipe(
+    Effect.try({
+      try: () => encodeIssueTools[name]!(params),
+      catch: (cause) => new ToolParametersEncodeError({ cause }),
+    }).pipe(
       Effect.flatMap((encoded) =>
         toolkit.handle(name, encoded as Tool.ParametersEncoded<(typeof IssuesToolkit.tools)[Name]>),
       ),
@@ -666,7 +674,7 @@ describe("issue toolkit handlers", () => {
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(["issues"])),
           Effect.provide(
             McpHttpServer.toolkitRegistration(IssuesToolkit, IssuesHandlers.layer).pipe(
-              Layer.provideMerge(McpServer.McpServer.layer),
+              Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
               Layer.provide(harness.layerDependencies),
             ),
           ),
@@ -898,7 +906,7 @@ describe("issue toolkit handlers", () => {
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(["issues"])),
           Effect.provide(
             McpHttpServer.toolkitRegistration(IssuesToolkit, IssuesHandlers.layer).pipe(
-              Layer.provideMerge(McpServer.McpServer.layer),
+              Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
               Layer.provide(harness.layerDependencies),
             ),
           ),
@@ -1471,7 +1479,8 @@ describe("issue toolkit handlers", () => {
                     id: "issue",
                     identifier: "ENG-7",
                     team: { key: "ENG" },
-                    url: standaloneDetail.url,
+                    // The workspace must match the mocked team's urlKey below.
+                    url: "https://linear.app/acme/issue/ENG-7/seven",
                   };
                 }),
               getTeam: () =>

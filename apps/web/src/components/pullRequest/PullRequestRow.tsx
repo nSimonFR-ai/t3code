@@ -17,15 +17,51 @@ import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
 import type { EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLinkContextMenu";
 import {
-  PULL_REQUEST_PAGE_ROW_CLASS,
   PULL_REQUEST_ROW_CLASS,
   PULL_REQUEST_ROW_NUMBER_CLASS,
   PullRequestRowAuthor,
   PullRequestRowGlyph,
-  PullRequestRowLabels,
   PullRequestRowLines,
 } from "./PullRequestListRow";
-import { PullRequestReviewDecisionGlyph } from "./pullRequestPresentation";
+import { PullRequestLabelChip, PullRequestReviewDecisionGlyph } from "./pullRequestPresentation";
+
+const LABEL_SLOTS = [
+  { overflow: "@xl/pr-row-meta:hidden" },
+  { overflow: "@3xl/pr-row-meta:hidden" },
+  { overflow: "" },
+] as const;
+
+function PullRequestRowLabels({ labels }: { labels: EnvironmentPullRequestEntry["labels"] }) {
+  if (labels.length === 0) return null;
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      {LABEL_SLOTS.map((slot, index) => {
+        const label = labels[index];
+        if (!label) return null;
+        const remaining = labels.length - index - 1;
+        return (
+          <PullRequestLabelChip
+            key={label.name}
+            label={label}
+            className={
+              index === 0
+                ? ""
+                : index === 1
+                  ? "hidden @xl/pr-row-meta:inline-flex"
+                  : "hidden @3xl/pr-row-meta:inline-flex"
+            }
+          >
+            {remaining > 0 ? (
+              <span className={cn("shrink-0", slot.overflow)}>+{remaining}</span>
+            ) : null}
+          </PullRequestLabelChip>
+        );
+      })}
+    </span>
+  );
+}
+
+const PAGE_ROW_CLASS = "px-3 py-2.5";
 
 export type PullRequestRowTarget = Pick<
   EnvironmentPullRequestEntry,
@@ -42,6 +78,7 @@ function PullRequestRowImpl({
   statsKey,
   statsRef,
   onSelect,
+  onIntent,
   hostActions,
   onActed,
   closing = false,
@@ -58,6 +95,8 @@ function PullRequestRowImpl({
   statsKey?: string;
   statsRef?: RefCallback<HTMLDivElement>;
   onSelect: (entry: PullRequestRowTarget) => void;
+  /** The row the pointer or focus rests on, or null when it leaves. */
+  onIntent?: (entry: PullRequestRowTarget | null) => void;
   hostActions: ReadonlySet<PullRequestAction>;
   onActed: (result: PullRequestSpeedActionResult) => void;
   closing?: boolean;
@@ -79,7 +118,19 @@ function PullRequestRowImpl({
         type="button"
         aria-current={selected ? "true" : undefined}
         onClick={() => onSelect(entry)}
-        className={cn(PULL_REQUEST_ROW_CLASS, PULL_REQUEST_PAGE_ROW_CLASS)}
+        onPointerEnter={() => onIntent?.(entry)}
+        onPointerLeave={(event) => {
+          if (event.currentTarget !== document.activeElement) onIntent?.(null);
+        }}
+        onFocus={() => onIntent?.(entry)}
+        onBlur={(event) => {
+          if (!event.currentTarget.matches(":hover")) onIntent?.(null);
+        }}
+        className={cn(
+          PULL_REQUEST_ROW_CLASS,
+          PAGE_ROW_CLASS,
+          "min-w-0 flex-1 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+        )}
       >
         <PullRequestRowGlyph
           state={entry.state}

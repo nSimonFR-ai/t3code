@@ -77,7 +77,7 @@ vi.mock("@t3tools/client-runtime/state/session", async (importOriginal) => {
 vi.mock("~/connection/runtime", async () => {
   const { Atom } = await import("effect/reactivity");
   const Layer = await import("effect/Layer");
-  const Crypto = await import("effect/Crypto");
+  const SecureRandom = await import("effect/crypto/SecureRandom");
   const Option = await import("effect/Option");
   const SubscriptionRef = await import("effect/SubscriptionRef");
   const services = await import("@t3tools/client-runtime/connection");
@@ -143,13 +143,7 @@ vi.mock("~/connection/runtime", async () => {
               }),
           } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]),
         ),
-        Layer.succeed(
-          Crypto.Crypto,
-          Crypto.make({
-            randomBytes: (size) => new Uint8Array(size),
-            digest: (_algorithm, data) => Effect.succeed(data),
-          }),
-        ),
+        Layer.succeed(SecureRandom.SecureRandom, SecureRandom.make((size) => new Uint8Array(size))),
       ),
     ),
   };

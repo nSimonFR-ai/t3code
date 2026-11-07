@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   androidWorkspaceTabNavigationState,
   type AndroidWorkspaceNavigationTab,
-} from "../features/workspace/android-workspace-tabs";
+} from "../features/layout/workspace/android-workspace-tabs";
 import {
   androidWorkspaceDestinationAnimation,
   linkedThreadStep,
@@ -219,9 +219,10 @@ describe("Android workspace navigation", () => {
 });
 
 it("uses the shared split detail transition for issues without changing compact navigation", () => {
-  expect(androidWorkspaceDestinationAnimation("Issue", true)).toBe("none");
-  expect(androidWorkspaceDestinationAnimation("Issue", false)).toBeUndefined();
-  expect(androidWorkspaceDestinationAnimation("IssueCompose", true)).toBeUndefined();
+  const route = (name: string) => ({ key: `${name}-key`, name });
+  expect(androidWorkspaceDestinationAnimation(route("Issue"), [], true)).toBe("none");
+  expect(androidWorkspaceDestinationAnimation(route("Issue"), [], false)).toBeUndefined();
+  expect(androidWorkspaceDestinationAnimation(route("IssueCompose"), [], true)).toBeUndefined();
 });
 
 describe("Android Settings tab", () => {

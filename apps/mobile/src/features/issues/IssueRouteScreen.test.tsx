@@ -67,7 +67,8 @@ vi.mock("@react-navigation/native", () => ({
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("../../components/ui/AppText", () => ({ AppText: ({ children }: Props) => children }));
-vi.mock("../../components/ui/AndroidScreenHeader", () => ({ AndroidScreenHeader: () => null }));
+vi.mock("../../components/ui/AppBar", () => ({ AppBar: () => null }));
+vi.mock("../../components/ui/ScreenContent", () => ({ ScreenContent: ({ children }: Props) => children }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../components/ui/Menu", () => ({
   Menu: ({
@@ -83,14 +84,6 @@ vi.mock("../../components/ui/Menu", () => ({
     harness.menus.set(title, { actions, onPressAction });
     return children;
   },
-}));
-vi.mock("../../native/StackHeader", () => ({ NativeStackScreenOptions: () => null }));
-vi.mock("../../components/ui/Toolbar", () => ({
-  Toolbar: Object.assign(() => null, {
-    Menu: () => null,
-    MenuAction: () => null,
-    Label: () => null,
-  }),
 }));
 vi.mock("../../native/useOpenPullRequest", () => ({ useOpenPullRequest: () => vi.fn() }));
 vi.mock("../../state/entities", () => ({
@@ -121,10 +114,7 @@ vi.mock("../threads/ThreadMarkdownImage", () => ({ ThreadMarkdownImageView: () =
 vi.mock("../layout/AdaptiveWorkspaceLayout", () => ({
   useAdaptiveWorkspaceLayout: () => ({ layout: { usesSplitView: false } }),
 }));
-vi.mock("../layout/workspace-sidebar-toolbar", () => ({
-  AndroidWorkspaceSidebarButton: () => null,
-}));
-vi.mock("../workspace/useAndroidWorkspaceNavigation", () => ({
+vi.mock("../layout/workspace/useAndroidWorkspaceNavigation", () => ({
   useAndroidWorkspaceBack: () => () => harness.back++,
 }));
 vi.mock("../pull-requests/PullRequestControls", () => ({

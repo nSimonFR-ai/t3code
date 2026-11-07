@@ -136,7 +136,7 @@ vi.mock("../remoteOpen", async (importOriginal) => ({
 
 import { PullRequestCommentBody } from "../components/pullRequest/PullRequestCommentBody";
 import { PullRequestMarkdownContext } from "../components/pullRequest/PullRequestMarkdown";
-import { pullRequestAutolinkPlugins } from "../components/pullRequest/pullRequestMarkdown.logic";
+import { pullRequestMarkdownPlugins } from "../components/pullRequest/pullRequestMarkdown.logic";
 import { IssueCommentContent } from "../components/issue/IssueConversation";
 import ChatMarkdown from "../components/ChatMarkdown";
 import { PullRequestMarkdownEditor } from "../components/pullRequest/PullRequestMarkdownEditor";
@@ -210,12 +210,13 @@ async function show(surface: string, text = `[PR 42](${url})`, standaloneIssue =
       ) : (
         <PullRequestMarkdownContext
           value={{
-            remarkPlugins: pullRequestAutolinkPlugins({
+            remarkPlugins: pullRequestMarkdownPlugins({
               provider: "github",
               url: "https://github.com/acme/repo/pull/1",
             }),
             lineBreaks: false,
             threadRef: owner,
+            repository: "acme/repo",
           }}
         >
           <PullRequestCommentBody
@@ -359,6 +360,7 @@ it("keeps the editor body and its standalone preview link target unchanged", asy
   await act(async () =>
     root.render(
       <PullRequestMarkdownEditor
+        completionScope={null}
         value={value}
         cwd="/repo"
         environmentId={environmentId}

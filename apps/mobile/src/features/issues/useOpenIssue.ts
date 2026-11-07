@@ -1,7 +1,7 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { useCallback } from "react";
 import { Keyboard, Platform } from "react-native";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import type { IssueParams } from "./issueSelection";
 
 /** Android shows one page at a time; iOS pushes, or replaces a presenting sheet. */

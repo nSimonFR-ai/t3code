@@ -1,7 +1,10 @@
 import { AssetResource, IssueTrackerKind, ProjectId } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import { describe, expect, it } from "@effect/vitest";
+import * as Context from "effect/Context";
+import * as Mac from "effect/crypto/Mac";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -20,7 +23,10 @@ import {
 import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 
 import * as IssueService from "../issue/IssueService.ts";
+import * as PayloadSigner from "../auth/PayloadSigner.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as AssetSigner from "./AssetSigner.ts";
 import { issueTrackerSecretName } from "../issue/IssueTrackerHostLive.ts";
 import { linearMediaFetchUrl, linearMediaResponse } from "./LinearMediaFetch.ts";
 import { issueAssetUrl } from "./AssetAccess.ts";
@@ -74,7 +80,22 @@ function fixture(
   const issueLayer = Layer.mock(IssueService.IssueService)({
     sources: (projectId) => Effect.succeed(projectId === issue.projectId ? sources : []),
   });
+  // PayloadSigner.make caches its key; this one rereads it so a rotated key invalidates old URLs.
+  const signerLayer = Layer.effect(
+    AssetSigner.AssetSigner,
+    Effect.gen(function* () {
+      const mac = yield* Mac.Mac;
+      const current = () =>
+        PayloadSigner.fromSecret(signingKey).pipe(Effect.provideService(Mac.Mac, mac));
+      return {
+        sign: (payload: string) => Effect.flatMap(current(), (signer) => signer.sign(payload)),
+        verify: (payload: string, signature: string) =>
+          Effect.flatMap(current(), (signer) => signer.verify(payload, signature)),
+      };
+    }),
+  ).pipe(Layer.provide(NodeCrypto.layer));
   const nativeLayer = Layer.mergeAll(
+    signerLayer,
     Layer.mock(ServerSecretStore.ServerSecretStore)({
       getOrCreateRandom: () => Effect.sync(() => signingKey),
       get: (name) =>
@@ -132,7 +153,11 @@ describe("Linear media", () => {
           Layer.mock(NativeAppIconResolver.NativeAppIconResolver)({}),
           Layer.mock(GitHubCredentials.GitHubCredentials)({}),
           Layer.succeed(BuiltInDrivers.SourceControlDrivers, []),
-        ).pipe(Layer.provideMerge(NodeServices.layer));
+        ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
+        // The asset route resolves source-control media per request; Linear media never reads it.
+        const requestContext = Context.make(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+          resolve: () => Effect.die("unused"),
+        });
         const signed = yield* issueAssetUrl({
           resource: { _tag: "linear-media", issue, url },
         }).pipe(Effect.provide(Layer.merge(f.issueLayer, dependencies)));
@@ -150,6 +175,7 @@ describe("Linear media", () => {
             new Request("https://destination.example.invalid" + signed.relativeUrl, {
               headers: { authorization: "client-key", cookie: "private-cookie" },
             }),
+            requestContext,
           ),
         );
         expect(response.status).toBe(200);
@@ -165,14 +191,20 @@ describe("Linear media", () => {
         f.setSources([]);
         expect(
           (yield* Effect.promise(() =>
-            app.handler(new Request("https://destination.example.invalid" + signed.relativeUrl)),
+            app.handler(
+              new Request("https://destination.example.invalid" + signed.relativeUrl),
+              requestContext,
+            ),
           )).status,
         ).toBe(404);
         f.setSources([source]);
         f.setSigningKey(new Uint8Array(32).fill(8));
         expect(
           (yield* Effect.promise(() =>
-            app.handler(new Request("https://foreign.example.invalid" + signed.relativeUrl)),
+            app.handler(
+              new Request("https://foreign.example.invalid" + signed.relativeUrl),
+              requestContext,
+            ),
           )).status,
         ).toBe(404);
         expect(f.requests).toHaveLength(1);

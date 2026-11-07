@@ -329,6 +329,7 @@ export const api = (
     readonly hostname?: string;
     readonly method?: string;
     readonly stdin?: string;
+    readonly headers?: ReadonlyArray<string>;
     readonly maxOutputBytes?: number;
     readonly timeoutMs?: number;
   },
@@ -343,6 +344,7 @@ export const api = (
       ...(input.stdin === undefined
         ? []
         : ["--input", "-", "--header", "Content-Type: application/json"]),
+      ...(input.headers ?? []).flatMap((header) => ["--header", header]),
     ],
     ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
     ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),

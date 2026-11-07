@@ -4,7 +4,7 @@ What this fork (`nSimonFR-ai/t3code`, branch `nicos/issues-nightly-<version>`) c
 
 Requirements use MUST / SHOULD. Each section ends with where the change lives and how it's checked, so the next rebase onto a newer nightly can carry it forward or drop it on purpose.
 
-Current base: `v0.1.7-nightly.20261102.4080` (pingdotgg/t3code `main` at `47f2c8d29e`) + pingdotgg/t3code#19576 at `4b44b92`.
+Current base: `v0.1.8-nightly.20261107.4301` (pingdotgg/t3code `main` at `4cb6945dc6`) + pingdotgg/t3code#19576 at `4b44b92`.
 
 ## 1. Issues stack
 
@@ -20,7 +20,7 @@ Where: merge commit on the branch, plus the follow-up port commit. Check: web, s
 
 ## 2. Database migrations
 
-- R2.1 The issue migrations MUST be numbered after upstream's highest migration (78–81 at nightly 4080, after upstream's 77). On every rebase, recheck upstream's highest id and move the issue block past it.
+- R2.1 The issue migrations MUST be numbered after upstream's highest migration (81–84 at nightly 4301, after upstream's 80). On every rebase, recheck upstream's highest id and move the issue block past it.
 - R2.2 Databases written by #19576 preview builds (issue block at 63, 65 or 67) or by the 0.1.4 fork builds (issue block at 73–76) MUST be moved to the new ids. Any upstream migrations those ids shadowed MUST run (upstream's 73–77 for the 0.1.4 builds).
 - R2.3 Databases written by the earlier fork builds (ledger rows `62 ProjectionThreadIssues`, `63 WorkItemLinks`) MUST start cleanly. The server retires those two rows, drops the unused `work_item_links` table and `projection_threads.issue_links_json` column, then runs upstream's 62+ and the issue migrations.
 - R2.4 Back up `statev2.sqlite` on both hosts before deploying. New migrations can't be rolled back.
@@ -71,7 +71,7 @@ Where: `apps/web/src/rightPanelStore.ts`, `closedViewStore.ts` (`merge`), `compo
 - R7.1 Builds MUST bake in T3 Connect's public configuration: `T3CODE_RELAY_URL`, `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`, `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`. Without them, Connect is silently off.
 - R7.2 The branch MUST keep the fork's `.github/workflows`. The bot token can't push workflow changes.
 - R7.3 `apps/desktop`, `apps/server`, `apps/web` and `packages/contracts` MUST be stamped with the nightly version.
-- R7.4 Mac app: the official app with `app.asar`'s `apps/server/dist` replaced, the same unpacked files, the asar integrity hash updated, `app-update.yml` removed, and an ad-hoc signature. It MUST NOT update itself back to the official nightly.
+- R7.4 Mac app: the official app with `app.asar`'s `apps/server/dist` replaced, the same unpacked files, `server-compile-cache` removed (its V8 caches are keyed to the official sources), the asar integrity hash updated, `app-update.yml` removed, and an ad-hoc signature. It MUST NOT update itself back to the official nightly.
 - R7.5 linux-arm64: the official archive with `t3` and `client/` replaced. `t3` is a Node SEA built on a 16 KiB-page arm64 host (the rpi5) with Node = root `engines.node` plus postject.
 - R7.6 Before release: run `t3 --version` on both builds, and boot the rpi5 build once on an empty home.
 

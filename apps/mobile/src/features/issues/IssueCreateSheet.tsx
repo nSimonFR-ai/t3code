@@ -16,7 +16,7 @@ import { Button } from "../../components/ui/Button";
 import { issueEnvironment } from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { ListFilterMenu } from "../workspace/ListFilterMenu";
+import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
 import { PullRequestSheetContent as SheetContent } from "../pull-requests/PullRequestSheetContent";
 import { issueCreateBlocked, resolveIssueType } from "./issueDetail";
 import {

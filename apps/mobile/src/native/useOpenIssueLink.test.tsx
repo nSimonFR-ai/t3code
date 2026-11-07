@@ -37,9 +37,10 @@ vi.mock("@react-navigation/native", () => ({
   }),
   useRoute: () => harness.route,
 }));
-vi.mock("../features/workspace/useSelectWorkspaceDetail", () => ({
+vi.mock("../features/layout/workspace/useSelectWorkspaceDetail", () => ({
   useSelectWorkspaceDetail: () => vi.fn(),
 }));
+vi.mock("../state/use-thread-pr", () => ({ withKnownPullRequestSummary: (params: unknown) => params }));
 vi.mock("../lib/openExternalUrl", () => ({
   tryOpenExternalUrl: async (url: string) => {
     harness.external.push(url);

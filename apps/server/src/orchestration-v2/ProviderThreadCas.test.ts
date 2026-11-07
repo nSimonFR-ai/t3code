@@ -64,7 +64,7 @@ it.effect(
         createdAt: now,
         updatedAt: now,
       };
-      const update = (id: string, value: typeof OrchestrationV2ProviderThreadJson.Type) => ({
+      const update = (id: string, value: OrchestrationV2ProviderThreadJson) => ({
         id: EventId.make(id),
         type: "provider-thread.updated" as const,
         threadId,

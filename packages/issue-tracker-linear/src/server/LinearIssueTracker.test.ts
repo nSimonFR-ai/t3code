@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Fiber from "effect/Fiber";
@@ -223,16 +223,7 @@ function fakeLinear(
     http,
     host,
     RateLimit.layer,
-    Layer.succeed(
-      Crypto.Crypto,
-      Crypto.make({
-        randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
-        digest: (algorithm, data) =>
-          Effect.promise(() =>
-            globalThis.crypto.subtle.digest(algorithm, new Uint8Array(data).buffer),
-          ).pipe(Effect.map((buffer) => new Uint8Array(buffer))),
-      }),
-    ),
+    Digest.layerWebCrypto,
   );
   const tracker = LinearIssueTracker.make.pipe(
     Effect.map((api) => api as Required<StandaloneIssueTrackerApi>),

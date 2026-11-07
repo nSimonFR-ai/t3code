@@ -29,7 +29,7 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -144,10 +144,10 @@ function sameLinearIssueUrl(leftUrl: string, rightUrl: string, key: ThreadIssueK
 const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const issues = yield* IssueService.IssueService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
 
   const commandId = (tag: string, threadId: ThreadId) =>
-    crypto.randomUUIDv4().pipe(
+    random.uuidV4().pipe(
       Effect.orDie,
       Effect.map((uuid) => CommandId.make(`server:thread-issue-${tag}:${threadId}:${uuid}`)),
     );

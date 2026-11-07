@@ -16,7 +16,6 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -24,15 +23,14 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppText as Text } from "../../components/ui/AppText";
-import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
+import { AppBar } from "../../components/ui/AppBar";
+import { ScreenContent } from "../../components/ui/ScreenContent";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Menu } from "../../components/ui/Menu";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Button } from "../../components/ui/Button";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { relativeTime } from "../../lib/time";
-import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { Toolbar } from "../../components/ui/Toolbar";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { useProject, useProjects, useServerConfigs } from "../../state/entities";
 import {
@@ -45,14 +43,13 @@ import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { usePullToRefresh } from "../../state/use-pull-to-refresh";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
-import { AndroidWorkspaceSidebarButton } from "../layout/workspace-sidebar-toolbar";
 import { PullRequestCardGroup, PullRequestCardRow } from "../pull-requests/PullRequestControls";
 import { PullRequestMarkdown } from "../pull-requests/PullRequestMarkdown";
 import { PullRequestMediaContext } from "../pull-requests/PullRequestMedia";
 import { PullRequestAvatar } from "../pull-requests/PullRequestPresentation";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
-import { useAndroidWorkspaceBack } from "../workspace/useAndroidWorkspaceNavigation";
+import { useAndroidWorkspaceBack } from "../layout/workspace/useAndroidWorkspaceNavigation";
 import { issueReactionAllowed, issueTimeline, linkedPullRequestContext } from "./issueDetail";
 import {
   mergeIssueComments,
@@ -654,76 +651,53 @@ function IssueRouteContent({
   const title = issue?.displayKey ?? params.displayKey ?? params.key;
   const subtitle = access.connected ? params.scope : `${params.scope} · Offline`;
   return (
-    <View className={Platform.OS === "android" ? "flex-1 bg-header" : "flex-1 bg-screen"}>
-      <NativeStackScreenOptions
-        options={{ title, headerTitle: title, unstable_headerSubtitle: subtitle }}
+    <View className="flex-1 android:bg-header ios:bg-screen">
+      <AppBar
+        title={title}
+        subtitle={subtitle}
+        onBack={layout.usesSplitView ? undefined : returnToList}
+        menus={[
+          {
+            title: "Issue",
+            icon: "ellipsis",
+            items: [
+              ...(access.comment
+                ? [
+                    {
+                      id: "add-comment",
+                      title: "Add comment",
+                      icon: "plus.bubble",
+                      onPress: () =>
+                        navigation.navigate("IssueCompose", { ...params, mode: "comment" }),
+                    },
+                  ]
+                : []),
+              ...(access.edit
+                ? [
+                    {
+                      id: "edit-issue",
+                      title: "Edit issue",
+                      icon: "pencil",
+                      onPress: () =>
+                        navigation.navigate("IssueCompose", { ...params, mode: "edit" }),
+                    },
+                  ]
+                : []),
+              ...(issue
+                ? [
+                    {
+                      id: "open-in-browser",
+                      title: "Open in browser",
+                      icon: "arrow.up.right",
+                      onPress: () => void Linking.openURL(issue.url),
+                    },
+                  ]
+                : []),
+            ],
+          },
+        ]}
       />
-      {Platform.OS === "android" ? (
-        <AndroidScreenHeader
-          title={title}
-          subtitle={subtitle}
-          onBack={layout.usesSplitView ? undefined : returnToList}
-          leading={layout.usesSplitView ? <AndroidWorkspaceSidebarButton /> : undefined}
-          actions={[
-            ...(access.comment
-              ? [
-                  {
-                    accessibilityLabel: "Add comment",
-                    icon: "plus.bubble" as const,
-                    onPress: () =>
-                      navigation.navigate("IssueCompose", { ...params, mode: "comment" }),
-                  },
-                ]
-              : []),
-            ...(access.edit
-              ? [
-                  {
-                    accessibilityLabel: "Edit issue",
-                    icon: "pencil" as const,
-                    onPress: () => navigation.navigate("IssueCompose", { ...params, mode: "edit" }),
-                  },
-                ]
-              : []),
-            ...(issue
-              ? [
-                  {
-                    accessibilityLabel: "Open in browser",
-                    icon: "arrow.up.right" as const,
-                    onPress: () => void Linking.openURL(issue.url),
-                  },
-                ]
-              : []),
-          ]}
-        />
-      ) : null}
-      <Toolbar placement="right">
-        <Toolbar.Menu title="Issue" accessibilityLabel="Issue actions" icon="ellipsis">
-          {access.comment ? (
-            <Toolbar.MenuAction
-              icon="plus.bubble"
-              onPress={() => navigation.navigate("IssueCompose", { ...params, mode: "comment" })}
-            >
-              <Toolbar.Label>Add comment</Toolbar.Label>
-            </Toolbar.MenuAction>
-          ) : null}
-          {access.edit ? (
-            <Toolbar.MenuAction
-              icon="pencil"
-              onPress={() => navigation.navigate("IssueCompose", { ...params, mode: "edit" })}
-            >
-              <Toolbar.Label>Edit issue</Toolbar.Label>
-            </Toolbar.MenuAction>
-          ) : null}
-          {issue ? (
-            <Toolbar.MenuAction
-              icon="arrow.up.right"
-              onPress={() => void Linking.openURL(issue.url)}
-            >
-              <Toolbar.Label>Open in browser</Toolbar.Label>
-            </Toolbar.MenuAction>
-          ) : null}
-        </Toolbar.Menu>
-      </Toolbar>
+      <ScreenContent>
       <ScrollView
         onLayout={({ nativeEvent }) => setViewportHeight(nativeEvent.layout.height)}
         onContentSizeChange={(_width, height) => {
@@ -737,11 +711,7 @@ function IssueRouteContent({
           )
             activity.current?.loadMore();
         }}
-        className={
-          Platform.OS === "android"
-            ? "flex-1 overflow-hidden rounded-t-[28px] bg-sheet-solid"
-            : "flex-1"
-        }
+        className="flex-1"
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ padding: 16, paddingBottom: Math.max(insets.bottom, 16) + 16 }}
         refreshControl={
@@ -797,6 +767,7 @@ function IssueRouteContent({
           />
         )}
       </ScrollView>
+      </ScreenContent>
     </View>
   );
 }

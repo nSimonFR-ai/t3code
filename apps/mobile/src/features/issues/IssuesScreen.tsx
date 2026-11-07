@@ -25,7 +25,7 @@ import { useProjects } from "../../state/entities";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { useDebouncedValue } from "../../state/queries";
 import { issueEnvironment } from "../../state/issues";
-import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { IssueListFilters } from "./IssueListFilters";
 import { IssueListRow } from "./IssueListRow";
 import {

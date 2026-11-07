@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import { HttpClient } from "effect/http";
 import { IssueTrackerHost } from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
@@ -14,13 +14,7 @@ export function makeJiraTransport(
     Effect.provideService(HttpClient.HttpClient, http),
     Effect.provideService(IssueTrackerHost, host),
     Effect.provide(SourceControlRateLimit.layer),
-    Effect.provideService(
-      Crypto.Crypto,
-      Crypto.make({
-        randomBytes: (size) => new Uint8Array(size),
-        digest: (_algorithm, data) => Effect.succeed(data),
-      }),
-    ),
+    Effect.provide(Digest.layerWebCrypto),
   );
 }
 

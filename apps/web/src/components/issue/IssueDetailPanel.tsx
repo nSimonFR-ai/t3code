@@ -1088,6 +1088,7 @@ function IssueDetailContent({
               />
             ) : editing === "body" && canEditBody ? (
               <PullRequestMarkdownEditor
+                completionScope={null}
                 value={detail.body}
                 cwd={cwd}
                 environmentId={environmentId}

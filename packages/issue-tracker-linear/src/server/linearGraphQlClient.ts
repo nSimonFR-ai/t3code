@@ -1,9 +1,8 @@
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
-import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -79,7 +78,7 @@ export const make = Effect.gen(function* () {
   const config = yield* LinearApiConfig.pipe(Effect.orDie);
   const httpClient = yield* HttpClient.HttpClient;
   const host = yield* IssueTrackerHost.IssueTrackerHost;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const rateLimits = yield* RateLimit.SourceControlRateLimit;
   const rateKey = { provider: KIND, host: new URL(config.apiUrl).host };
   const identities = new Map<string, string>();
@@ -114,9 +113,7 @@ export const make = Effect.gen(function* () {
       token?: string,
     ): Effect.fn.Return<A, IssueTrackerError> {
       const key = token ?? (yield* storedToken(operation));
-      const fingerprint = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(key))
-        .pipe(Effect.map(Hex.encode), Effect.orDie);
+      const fingerprint = yield* digest.digestHex(Digest.sha256, new TextEncoder().encode(key));
       const credentialScope = identities.get(fingerprint) ?? fingerprint;
       const scopes = [undefined, ...(endpoints.get(document) ?? [])];
       const checks = yield* Effect.forEach(scopes, (scope) =>

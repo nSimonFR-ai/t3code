@@ -14,7 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as DateTime from "effect/DateTime";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Semaphore from "effect/Semaphore";
 import {
   IssueTrackerConnectionError,
@@ -67,7 +67,7 @@ const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const bindings = yield* IssueTrackerBindings.IssueTrackerBindingsRepository;
   const accounts = yield* IssueTrackerAccounts.IssueTrackerAccountsRepository;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const projects = yield* ProjectService.ProjectService;
   const mutations = yield* Semaphore.make(1);
 
@@ -359,8 +359,8 @@ const make = Effect.gen(function* () {
     }
     const connectionId =
       saved?.connectionId ??
-      (yield* crypto
-        .randomUUIDv4()
+      (yield* random
+        .uuidV4()
         .pipe(
           Effect.mapError(secretFailure(api.kind, "The account identifier could not be created.")),
         ));

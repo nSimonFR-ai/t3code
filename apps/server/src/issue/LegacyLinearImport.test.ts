@@ -7,6 +7,7 @@ import {
   IssueTrackerConnectionError,
   IssueTrackerKind,
 } from "@t3tools/contracts";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -24,6 +25,7 @@ import {
 const linear = IssueTrackerKind.make("linear");
 
 const layerBase = ServerSecretStore.layer.pipe(
+  Layer.provideMerge(SecureRandom.layerWebCrypto),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-legacy-linear-" })),
   Layer.provideMerge(NodeServices.layer),
 );

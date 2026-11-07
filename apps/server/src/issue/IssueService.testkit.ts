@@ -4,7 +4,8 @@ import type {
   ProjectId,
 } from "@t3tools/contracts";
 import type { IssueTrackerApi } from "@t3tools/issue-tracker-core/server/IssueTracker";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -16,9 +17,9 @@ import * as IssueService from "./IssueService.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
 export const issueCryptoLayer = (randomBytes: (size: number) => Uint8Array) =>
-  Layer.succeed(
-    Crypto.Crypto,
-    Crypto.make({ randomBytes, digest: (_algorithm, data) => Effect.succeed(data) }),
+  Layer.mergeAll(
+    Layer.succeed(SecureRandom.SecureRandom, SecureRandom.make(randomBytes)),
+    Digest.layerWebCrypto,
   );
 
 export const makeIssueService = (input: {

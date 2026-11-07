@@ -115,6 +115,7 @@ export function IssueCommentContent({
         />
       ) : editing && comment.richBody === undefined ? (
         <PullRequestMarkdownEditor
+          completionScope={null}
           value={body}
           cwd={cwd}
           environmentId={environmentId}

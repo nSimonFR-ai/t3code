@@ -1,6 +1,5 @@
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
-import * as Hex from "effect/encoding/Hex";
+import * as Digest from "effect/crypto/Digest";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -145,7 +144,7 @@ export class JiraApi extends Context.Service<
 export const make = Effect.gen(function* () {
   const http = yield* HttpClient.HttpClient;
   const host = yield* IssueTrackerHost;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
 
   const request = <S extends Schema.Top & { readonly DecodingServices: never }>(
@@ -240,20 +239,10 @@ export const make = Effect.gen(function* () {
           dataCenterRequest({ ...input, assigneeName: user.name }),
         );
       }
-      const fingerprint = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(credential.token))
-        .pipe(
-          Effect.map(Hex.encode),
-          Effect.mapError(
-            () =>
-              new IssueTrackerError({
-                tracker: KIND,
-                operation: input.operation,
-                reason: "failed",
-                detail: "The Jira credential scope could not be read.",
-              }),
-          ),
-        );
+      const fingerprint = yield* digest.digestHex(
+        Digest.sha256,
+        new TextEncoder().encode(credential.token),
+      );
       return yield* Effect.gen(function* () {
         const key = { provider: KIND, host: credential.host };
         const lease = yield* limits.check(key).pipe(

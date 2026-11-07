@@ -254,6 +254,7 @@ it("keeps the raw upload in the editor and signs only its preview", async () => 
   const onSave = vi.fn();
   await render(
     <PullRequestMarkdownEditor
+      completionScope={null}
       value={text}
       cwd="/repo"
       environmentId={environmentB}
@@ -570,6 +571,7 @@ async function openInlineVideo(surface: string, url: string) {
       />
     ) : surface === "editor preview" ? (
       <PullRequestMarkdownEditor
+        completionScope={null}
         {...props}
         value={prose(url)}
         label="Description"
