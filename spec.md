@@ -4,7 +4,7 @@ What this fork (`nSimonFR-ai/t3code`, branch `nicos/issues-nightly-<version>`) c
 
 Requirements use MUST / SHOULD. Each section ends with where the change lives and how it's checked, so the next rebase onto a newer nightly can carry it forward or drop it on purpose.
 
-Current base: `v0.1.8-nightly.20261108.4367` (pingdotgg/t3code `main` at `6417151c09`) + pingdotgg/t3code#19576 at `4b44b92`.
+Current base: `v0.1.8-nightly.20261108.4380` (pingdotgg/t3code `main` at `ade473018d`) + pingdotgg/t3code#19576 at `4b44b92`.
 
 ## 1. Issues stack
 
