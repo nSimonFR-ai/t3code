@@ -27,6 +27,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpClientRequest, HttpClientResponse, HttpServerResponse } from "effect/http";
 import { vi } from "vite-plus/test";
 
+import * as PayloadSigner from "../auth/PayloadSigner.ts";
 import * as AssetSigner from "./AssetSigner.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -181,12 +182,15 @@ describe("AssetAccess", () => {
         const secrets = yield* ServerSecretStore.ServerSecretStore;
         const signingKey = yield* secrets.getOrCreateRandom("asset-access-signing-key", 32);
         const foreignKey = Uint8Array.from(signingKey, (byte) => byte ^ 255);
+        const foreignSigner = yield* PayloadSigner.make("asset-access-signing-key").pipe(
+          Effect.provideService(ServerSecretStore.ServerSecretStore, {
+            ...secrets,
+            getOrCreateRandom: () => Effect.succeed(foreignKey),
+          }),
+        );
         expect(
           yield* resolve(signed.relativeUrl).pipe(
-            Effect.provideService(ServerSecretStore.ServerSecretStore, {
-              ...secrets,
-              getOrCreateRandom: () => Effect.succeed(foreignKey),
-            }),
+            Effect.provideService(AssetSigner.AssetSigner, foreignSigner),
           ),
         ).toBeNull();
         yield* TestClock.adjust("1 hour");
