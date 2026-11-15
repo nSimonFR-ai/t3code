@@ -24,12 +24,17 @@ import type {
 export interface ContextMenuItem<T extends string = string> {
   id: T;
   label: string;
+  detail?: string;
   destructive?: boolean;
   disabled?: boolean;
   header?: boolean;
   icon?: string;
   separatorBefore?: boolean;
   checked?: boolean;
+  /** The item's key as the platform writes it ("⌥⌘F"), shown by the web fallback. */
+  shortcut?: string;
+  /** The same key in Electron accelerator form, shown (not registered) by desktop menus. */
+  accelerator?: string;
   children?: readonly ContextMenuItem<T>[];
 }
 
@@ -40,24 +45,30 @@ export type QuitShortcutHintEvent =
 export interface ContextMenuItemSchemaType {
   readonly id: string;
   readonly label: string;
+  readonly detail?: string;
   readonly destructive?: boolean;
   readonly disabled?: boolean;
   readonly header?: boolean;
   readonly icon?: string;
   readonly separatorBefore?: boolean;
   readonly checked?: boolean;
+  readonly shortcut?: string;
+  readonly accelerator?: string;
   readonly children?: readonly ContextMenuItemSchemaType[];
 }
 
 export const ContextMenuItemSchema: Schema.Codec<ContextMenuItemSchemaType> = Schema.Struct({
   id: Schema.String,
   label: Schema.String,
+  detail: Schema.optionalKey(Schema.String),
   destructive: Schema.optionalKey(Schema.Boolean),
   disabled: Schema.optionalKey(Schema.Boolean),
   header: Schema.optionalKey(Schema.Boolean),
   icon: Schema.optionalKey(Schema.String),
   separatorBefore: Schema.optionalKey(Schema.Boolean),
   checked: Schema.optionalKey(Schema.Boolean),
+  shortcut: Schema.optionalKey(Schema.String),
+  accelerator: Schema.optionalKey(Schema.String),
   children: Schema.optionalKey(
     Schema.Array(
       Schema.suspend((): Schema.Codec<ContextMenuItemSchemaType> => ContextMenuItemSchema),
@@ -334,6 +345,8 @@ export const DesktopCliCommandStateSchema = Schema.Struct({
   installedPath: Schema.NullOr(Schema.String),
   onPath: Schema.Boolean,
   shadowedBy: Schema.optionalKey(Schema.String),
+  /** For an installed `t3` that is off PATH: the shell startup file that adds it, and whether it has. */
+  pathSetup: Schema.optionalKey(Schema.Struct({ file: Schema.String, added: Schema.Boolean })),
   /** The app's bundled `t3` launcher, which runs without Node or a PATH entry. */
   launcherPath: Schema.NullOr(Schema.String),
 });
@@ -628,6 +641,12 @@ export interface DesktopPreviewOpenLinkEvent {
   tabId: string;
   url: string;
   background: boolean;
+}
+
+export interface DesktopPreviewFindResultEvent {
+  tabId: string;
+  activeMatchOrdinal: number;
+  matches: number;
 }
 
 export const DesktopPreviewRecordingInputSchema = Schema.Union([
@@ -988,6 +1007,13 @@ export const DesktopPreviewSetZoomFactorInputSchema = Schema.Struct({
   zoomFactor: Schema.Number.check(Schema.isGreaterThan(0)),
 });
 
+export const DesktopPreviewFindInPageInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  text: Schema.NonEmptyString.check(Schema.isMaxLength(1000)),
+  forward: Schema.Boolean,
+  newSession: Schema.Boolean,
+});
+
 export const DesktopPreviewSetAudioMutedInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   audioMuted: Schema.Boolean,
@@ -1002,6 +1028,33 @@ export const DesktopPreviewAnnotationThemeInputSchema = Schema.Struct({
   theme: DesktopPreviewAnnotationThemeSchema,
 });
 
+/**
+ * A chord a focused preview webview hands back to the app window instead of
+ * the page (the layout map). `key` is a keybinding key token ("arrowleft",
+ * "u", "["); modifiers are exact.
+ */
+export const DesktopForwardedShortcutSchema = Schema.Struct({
+  key: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(32)),
+  metaKey: Schema.Boolean,
+  ctrlKey: Schema.Boolean,
+  altKey: Schema.Boolean,
+  shiftKey: Schema.Boolean,
+});
+export type DesktopForwardedShortcut = typeof DesktopForwardedShortcutSchema.Type;
+
+export const DesktopPreviewForwardedShortcutsInputSchema = Schema.Struct({
+  shortcuts: Schema.Array(DesktopForwardedShortcutSchema).check(Schema.isMaxLength(256)),
+});
+
+/** A forwarded keydown, replayed in the app window as-is. */
+export interface DesktopForwardedKeyEvent {
+  readonly key: string;
+  readonly code: string;
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+  readonly altKey: boolean;
+  readonly shiftKey: boolean;
+}
 export const DesktopPreviewAnnotationSendEnabledInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   enabled: Schema.Boolean,
@@ -1092,6 +1145,8 @@ export interface DesktopBridge {
   ) => Promise<AuthAccessTokenResult>;
   fetchSshSessionState: (httpBaseUrl: string, bearerToken: string) => Promise<AuthSessionState>;
   onSshPasswordPrompt: (listener: (request: DesktopSshPasswordPromptRequest) => void) => () => void;
+  /** Fires with a prompt's request id once it is answered, cancelled, expired or abandoned. */
+  onSshPasswordPromptSettled: (listener: (requestId: string) => void) => () => void;
   resolveSshPasswordPrompt: (requestId: string, password: string | null) => Promise<void>;
   getServerExposureState: () => Promise<DesktopServerExposureState>;
   setServerExposureMode: (mode: DesktopServerExposureMode) => Promise<DesktopServerExposureState>;
@@ -1108,6 +1163,12 @@ export interface DesktopBridge {
   pickProjectFavicon: (initialPath?: string) => Promise<string | null>;
   pickThemeFiles: () => Promise<readonly PickedThemeFile[] | null>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
+  /**
+   * Whether the renderer shows the light, black chrome appearance, so the
+   * native window background and caption buttons match the black chrome.
+   * Optional while older desktop shells can host a newer web client.
+   */
+  setBlackChrome?: (enabled: boolean) => Promise<void>;
   showContextMenu: <T extends string>(
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },
@@ -1127,6 +1188,11 @@ export interface DesktopBridge {
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getWindowZoomFactor: () => number;
+  /**
+   * Shows or hides the macOS traffic lights; a no-op on other platforms.
+   * Optional: older desktop builds lack it.
+   */
+  setWindowButtonsVisible?: (visible: boolean) => Promise<void>;
   getUpdateState: () => Promise<DesktopUpdateState>;
   /** `minimumVersion` is a track switch's checked release; nothing older is offered after. */
   setUpdateChannel: (
@@ -1142,6 +1208,7 @@ export interface DesktopBridge {
     getState: () => Promise<DesktopCliCommandState>;
     install: () => Promise<DesktopCliCommandState>;
     uninstall: () => Promise<DesktopCliCommandState>;
+    addToPath: () => Promise<DesktopCliCommandState>;
   };
   webLinks: {
     setReady: (ready: boolean) => Promise<void>;
@@ -1247,6 +1314,12 @@ export interface DesktopPreviewBridge {
   hardReload: (tabId: string) => Promise<void>;
   setColorScheme: (tabId: string, colorScheme: DesktopPreviewColorScheme) => Promise<void>;
   setAudioMuted: (tabId: string, audioMuted: boolean) => Promise<void>;
+  findInPage: (
+    tabId: string,
+    text: string,
+    options: { forward: boolean; newSession: boolean },
+  ) => Promise<void>;
+  stopFindInPage: (tabId: string) => Promise<void>;
   /** Tells the tab's server whether its webview is on screen. */
   setShown: (tabId: string, shown: boolean) => Promise<void>;
   openDevTools: (tabId: string) => Promise<void>;
@@ -1265,6 +1338,9 @@ export interface DesktopPreviewBridge {
   }) => Promise<BrowserImportResult>;
   setAnnotationTheme: (theme: DesktopPreviewAnnotationTheme) => Promise<void>;
   setAnnotationSendEnabled: (tabId: string, enabled: boolean) => Promise<void>;
+  /** Older desktop shells may omit both layout-chord forwarding methods. */
+  setForwardedKeyChords?: (shortcuts: ReadonlyArray<DesktopForwardedShortcut>) => Promise<void>;
+  onForwardedKeyChord?: (listener: (event: DesktopForwardedKeyEvent) => void) => () => void;
   annotationVoice: {
     onEvent: (
       listener: (tabId: string, event: DesktopPreviewAnnotationVoiceEvent) => void,
@@ -1299,12 +1375,19 @@ export interface DesktopPreviewBridge {
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
   onOpenLink: (listener: (event: DesktopPreviewOpenLinkEvent) => void) => () => void;
+  onFindResult: (listener: (event: DesktopPreviewFindResultEvent) => void) => () => void;
 }
 
 export type ConfirmDialogVariant = "default" | "destructive";
 
 export interface ConfirmDialogOptions {
   readonly variant?: ConfirmDialogVariant;
+  /** Which button takes focus on open. Defaults to Cancel; destructive confirms always keep Cancel. */
+  readonly initialFocus?: "confirm" | "cancel";
+  /** Replaces the title parsed from the message; the whole message becomes the description. */
+  readonly title?: string;
+  /** The confirm button's label. Defaults to "Confirm". */
+  readonly confirmLabel?: string;
 }
 
 export interface LocalApi {

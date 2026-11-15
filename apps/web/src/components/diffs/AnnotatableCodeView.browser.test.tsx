@@ -62,7 +62,7 @@ function file(
 ) {
   const fileDiff = parsePatchFiles(
     `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n-old\n+new\n`,
-    name,
+    { cacheKeyPrefix: name },
   )[0]!.files[0]!;
   fileDiff.type = type;
   if (prevName) fileDiff.prevName = prevName;
@@ -150,7 +150,7 @@ describe("diff comment drafts", () => {
     await screen.rerender(view([refreshed], "loaded"));
     expect(editor().value).toBe("Keep this draft");
     expect(container.querySelector("mark")?.textContent).toBe("Line 1");
-    await click("Comment");
+    await click("Done");
     expect(useComposerDraftStore.getState().getComposerDraft(target)?.reviewComments).toEqual([
       expect.objectContaining({
         filePath: "shared.ts",

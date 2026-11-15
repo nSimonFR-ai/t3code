@@ -4,7 +4,7 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import { use, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Platform, Pressable, View } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
-import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
+import { AppBar } from "../../components/ui/AppBar";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Button } from "../../components/ui/Button";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -200,7 +200,7 @@ export function IssueCandidatesScreen({
         }}
       />
       {Platform.OS === "android" ? (
-        <AndroidScreenHeader title={title} onBack={() => navigation.goBack()} />
+        <AppBar title={title} onBack={() => navigation.goBack()} />
       ) : null}
       <FlatList
         data={rows}

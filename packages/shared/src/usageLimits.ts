@@ -11,6 +11,7 @@ import {
   isProviderAvailable,
   PROVIDER_DISPLAY_NAMES,
   type ServerProvider,
+  type ServerProviderResetCredits,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
   type UsageLimitSourceSnapshots,
@@ -213,6 +214,30 @@ const nativeReport = (provider: ServerProvider): AccountReport => ({
   workspaceId: provider.auth.workspaceId,
   usageLimits: provider.usageLimits,
 });
+
+/** Resolve the selected login across native duplicates and linked usage sources. */
+export function resolveProviderUsageLimits(
+  instanceId: ProviderInstanceId,
+  providers: readonly ServerProvider[],
+  sources: UsageLimitSourceSnapshots,
+): ServerProviderUsageLimits | undefined {
+  const selected = providers.find((provider) => provider.instanceId === instanceId);
+  if (!selected) return undefined;
+  const reports = [
+    ...providers.filter((provider) => provider.enabled).map(nativeReport),
+    ...sources.flatMap((source) => source.accounts),
+  ];
+  const resolveKey = accountKeyResolver(reports);
+  const key = resolveKey(nativeReport(selected));
+  const candidates = key === null ? [] : reports.filter((report) => resolveKey(report) === key);
+  return (
+    candidates
+      .flatMap((report) =>
+        report.usageLimits && limitsNotice(report.usageLimits) === null ? [report.usageLimits] : [],
+      )
+      .sort((a, b) => Date.parse(b.checkedAt) - Date.parse(a.checkedAt))[0] ?? selected.usageLimits
+  );
+}
 
 // Include every enabled login, even unreadable workspaces.
 function accountKeyResolver(reports: Iterable<AccountReport>) {
@@ -675,12 +700,125 @@ export function formatDuration(ms: number): string {
   return `${minutes}m`;
 }
 
+/** One redeemable reset as clients offer it; `input` already names the chosen credit. */
+export interface ResetCreditChoice {
+  readonly key: string;
+  readonly summary: string;
+  readonly actionLabel: string;
+  readonly confirmDescription: string;
+  readonly availableCount: number;
+  readonly input: ProviderConsumeResetCreditInput;
+}
+
+export function resetCreditChoices(
+  credits: ServerProviderResetCredits,
+  input: ProviderConsumeResetCreditInput,
+  now: number,
+  compact = false,
+): ReadonlyArray<ResetCreditChoice> {
+  const expiresIn = (at: string | undefined) => (at ? formatDuration(Date.parse(at) - now) : null);
+  if (credits.options && "instanceId" in input) {
+    return credits.options.map((option) => {
+      const expires = expiresIn(option.expiresAt);
+      return {
+        key: option.creditId,
+        summary: `${option.label} · ${option.availableCount} left${expires ? ` · expires in ${expires}` : ""}`,
+        actionLabel: "Use",
+        confirmDescription: `${option.label}: ${option.description} This cannot be undone.`,
+        availableCount: option.availableCount,
+        input: { ...input, creditId: option.creditId },
+      };
+    });
+  }
+  const count = credits.availableCount;
+  const expires = expiresIn(credits.nextExpiresAt);
+  return [
+    {
+      key: "next",
+      summary:
+        count === 0
+          ? "No reset credits banked"
+          : compact
+            ? `${count} banked${expires ? ` · expires in ${expires}` : ""}`
+            : `${count} ${count === 1 ? "reset credit" : "reset credits"} banked${expires ? ` · next expires in ${expires}` : ""}`,
+      actionLabel: "Use reset",
+      confirmDescription:
+        "This redeems one credit on your account and clears the current rate-limit windows. It cannot be undone.",
+      availableCount: count,
+      input,
+    },
+  ];
+}
+
 export function formatResetsIn(window: ServerProviderUsageWindow, now: number): string | null {
   const resetsAt = resetMillis(window);
   if (resetsAt === null) return null;
   if (resetsAt <= now) return "resets now";
   if (resetsAt - now < MINUTE) return "Resets momentarily";
   return `resets in ${formatDuration(resetsAt - now)}`;
+}
+
+/** Under this share of quota left, a window reads as low: amber, and worth a notice. */
+const LOW_LIMIT_REMAINING_PERCENT = 25;
+
+/** Whether the window has less than a quarter of its quota left. */
+export function isLowLimit(window: ServerProviderUsageWindow): boolean {
+  return remainingPercent(window) < LOW_LIMIT_REMAINING_PERCENT;
+}
+
+/**
+ * Milliseconds until the window's quota runs out at the rate spent so far,
+ * or null when that rate is unknown or the window resets first.
+ */
+export function projectRunOut(window: ServerProviderUsageWindow, now: number): number | null {
+  const resetsAt = resetMillis(window);
+  const elapsed = elapsedShare(window, now);
+  if (resetsAt === null || elapsed === null || window.windowDurationMins === undefined) {
+    return null;
+  }
+  const used = Math.max(0, Math.min(100, window.usedPercent));
+  const elapsedMs = elapsed * window.windowDurationMins * MINUTE;
+  if (used <= 0 || elapsedMs <= 0) return null;
+  if (used >= 100) return 0;
+  const runOut = ((100 - used) / used) * elapsedMs;
+  return runOut < resetsAt - now ? runOut : null;
+}
+
+/** `runs out in about 40m`, or null when the window resets before it runs dry. */
+export function formatRunsOutIn(window: ServerProviderUsageWindow, now: number): string | null {
+  const runOut = projectRunOut(window, now);
+  if (runOut === null) return null;
+  return runOut < MINUTE ? "runs out now" : `runs out in about ${formatDuration(runOut)}`;
+}
+
+export interface TightestLimit {
+  readonly account: LimitAccount;
+  readonly window: ServerProviderUsageWindow;
+  readonly remainingPercent: number;
+}
+
+/**
+ * The session window with the least quota left across the accounts, optionally
+ * for one driver. Accounts with no session window fall back to their shortest
+ * window kind, so a monthly-only plan still has something to report.
+ */
+export function tightestSessionLimit(
+  accounts: readonly LimitAccount[],
+  driver?: ServerProvider["driver"],
+): TightestLimit | null {
+  let tightest: TightestLimit | null = null;
+  for (const account of accounts) {
+    if (driver !== undefined && account.driver !== driver) continue;
+    const window = [...account.limits.windows].sort(
+      (left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind],
+    )[0];
+    if (!window) continue;
+    const remaining = remainingPercent(window);
+    if (tightest === null || remaining < tightest.remainingPercent) {
+      tightest = { account, window, remainingPercent: remaining };
+    }
+  }
+  return tightest;
 }
 
 export const USAGE_LIMITS_COMMAND = {
@@ -854,16 +992,25 @@ export function collectProviderUsageLimits(
       limits: shownCredits ? { ...limits, resetCredits: shownCredits } : limits,
     });
   }
+  let proxyAccountNumber = 0;
   for (const source of sources) {
     const matching = source.accounts.filter((account) => account.driver === selected.driver);
     for (const account of matching) {
       const key = resolveKey(account);
       if (key && nativeAccountKeys.has(key)) continue;
+      proxyAccountNumber += 1;
+      const driverLabel =
+        account.driver === "claudeAgent"
+          ? "Claude"
+          : String(account.driver).charAt(0).toUpperCase() + String(account.driver).slice(1);
       accounts.push({
         id: `${source.id}:${account.id}`,
         driver: account.driver,
-        label: `${source.label} · ${hubAccountName(account)}`,
-        sourceLabel: "CLI Proxy",
+        label:
+          account.email?.trim() ||
+          hubAccountName(account) ||
+          `${driverLabel} account ${proxyAccountNumber}`,
+        sourceLabel: source.label,
         ...(account.usageLimits.resetCredits?.nextCreditId
           ? {
               resetCreditInput: {

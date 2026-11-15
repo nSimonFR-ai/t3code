@@ -1,6 +1,9 @@
+import { resolveTimelineIsAtEnd } from "./MessagesTimeline.logic";
+import { injectHtmlRenderBootstrap } from "@t3tools/shared/htmlRender";
+import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
 import { flushSync } from "react-dom";
 import { AudioPreview } from "../files/AudioPreview";
-import { cdp, page } from "vite-plus/test/browser";
+import { cdp, page, userEvent } from "vite-plus/test/browser";
 import {
   ComposerContextId,
   EnvironmentId,
@@ -8,6 +11,7 @@ import {
   NodeId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSessionId,
   RunAttemptId,
   RunId,
   RuntimeRequestId,
@@ -15,6 +19,7 @@ import {
   ScheduledTaskId,
   ThreadId,
   type OrchestrationV2Subagent,
+  type OrchestrationV2ProjectedTurnItem,
 } from "@t3tools/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
@@ -22,11 +27,12 @@ import {
   Profiler,
   StrictMode,
   useState,
+  useRef,
   type ComponentProps,
   type ReactElement,
 } from "react";
 import * as DateTime from "effect/DateTime";
-import { Atom } from "effect/reactivity";
+import { Atom, AsyncResult } from "effect/reactivity";
 import { describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 
 import "~/index.css";
@@ -35,12 +41,15 @@ import { environmentThreadDetails } from "../../state/threads";
 import { act, fakeTimers, render, stubGlobal } from "../../../test/render";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { MessagesTimeline } from "./MessagesTimeline";
-import { makeStreamingTimelineFixture } from "../../test-fixtures";
+import { ComposerApprovalPanel } from "./ComposerApprovalPanel";
+import { usePendingThreadRequests } from "./usePendingThreadRequests";
+import { makeStreamingTimelineFixture, makeThreadProjectionFixture } from "../../test-fixtures";
 import {
   type PendingApproval,
   deriveTimelineEntriesFromVisibleTurnItems,
 } from "../../session-logic";
-import { remarkThoughtPreview } from "./TimelineWorkEntryRow.logic";
+import type { Root } from "mdast";
+import { remarkThoughtPreview, THOUGHT_PREVIEW_MAX_LENGTH } from "./TimelineWorkEntryRow.logic";
 import { parseMarkdownWithMath } from "@t3tools/shared/markdownMath";
 import { collectThreadFindRanges } from "./threadFindHighlights";
 import { toastManager } from "../ui/toast";
@@ -52,9 +61,10 @@ import {
   decodeComposerContextFragment,
 } from "@t3tools/shared/composerContextClipboard";
 import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import { useRightPanelStore } from "../../rightPanelStore";
 
 const environmentQuery = vi.hoisted(() => ({
-  error: "Pull request not found",
+  error: "Pull request not found" as string | null,
   data: null as unknown,
 }));
 vi.mock(import("~/state/query"), async (original) => ({
@@ -210,13 +220,156 @@ async function click(element: HTMLElement) {
 }
 
 function setup({ scheduledTasks = [] as ReadonlyArray<{ id: string; title: string }> } = {}) {
+  environmentQuery.error = "Pull request not found";
   environmentQuery.data = { tasks: scheduledTasks };
 }
 
 const TASK_ID = ScheduledTaskId.make("task-1");
 const AUTOMATION_PROMPT = "Triage the inbox\n\nLabel every new issue and close duplicates.";
 
+it("keeps collapsed approval shortcuts and disabled cancel actions inert", async () => {
+  const requestId = RuntimeRequestId.make("guarded-approval");
+  const onRespond = vi.fn(async () => {});
+  const ui = (disabled = false, isResponding = false) => (
+    <ComposerApprovalPanel
+      approval={{
+        requestId,
+        requestKind: "file-change",
+        createdAt: "2026-11-01T12:00:00.000Z",
+        responseCapability: "live",
+        files: [{ path: "src/index.ts", additions: 1 }],
+      }}
+      count={1}
+      disabled={disabled}
+      isResponding={isResponding}
+      onRespond={onRespond}
+    />
+  );
+  await using screen = await renderElement(ui());
+  const header = screen.container.querySelector<HTMLButtonElement>(
+    '[data-chat-composer-request-card="approval"] > button',
+  )!;
+  await click(header);
+  await expect.element(screen.getByText("src/index.ts")).not.toBeInTheDocument();
+  for (const key of ["Enter", "Escape"]) {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  }
+  expect(onRespond).not.toHaveBeenCalled();
+  await click(header);
+  await expect.element(screen.getByText("src/index.ts")).toBeVisible();
+  document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  expect(onRespond).toHaveBeenLastCalledWith(requestId, "accept");
+  onRespond.mockClear();
+  for (const [disabled, isResponding] of [
+    [true, false],
+    [false, true],
+  ]) {
+    await screen.rerender(ui(disabled, isResponding));
+    const cancel = screen.getByRole("button", { name: "Cancel approval", exact: true }).element();
+    cancel.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    for (const key of ["Enter", " "]) {
+      cancel.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    }
+    expect(onRespond).not.toHaveBeenCalled();
+  }
+});
+
 describe("MessagesTimeline work rows", () => {
+  it("does not rerender settled resource rows when the active answer streams", async () => {
+    const runId = RunId.make("streaming-run");
+    const resource: Entry = {
+      kind: "html-render",
+      id: "settled-resource",
+      createdAt: CREATED_AT,
+      runId: null,
+      htmlRender: { attachmentId: "visual", title: "Settled visual", height: 80 },
+    };
+    const renderHtmlRender = vi.fn(() => <span>Settled visual</span>);
+    const props = {
+      ...baseProps(),
+      isWorking: true,
+      latestRun: { runId, status: "running" as const, startedAt: CREATED_AT, completedAt: null },
+      renderHtmlRender,
+    };
+    const entries = (text: string) => [
+      resource,
+      message("Continue", { runId }),
+      message(text, { role: "assistant", runId, streaming: true }, "answer"),
+    ];
+    await using screen = await renderElement(
+      <MessagesTimeline {...props} timelineEntries={entries("First chunk")} />,
+    );
+    await expect.element(screen.getByText("First chunk", { exact: true })).toBeVisible();
+    renderHtmlRender.mockClear();
+    await screen.rerender(
+      <MessagesTimeline {...props} timelineEntries={entries("Second chunk")} />,
+    );
+    await expect.element(screen.getByText("Second chunk", { exact: true })).toBeVisible();
+    expect(renderHtmlRender).not.toHaveBeenCalled();
+  });
+
+  it("keeps a tall HTML preview in place when its last accordion opens at the bottom", async () => {
+    const props = baseProps();
+    const html = injectHtmlRenderBootstrap(`<div style="height:1400px">Earlier preview content</div>
+      <details><summary>More rows</summary><div style="height:900px">More rows</div></details>
+      <script>addEventListener('message', e => { if(e.data === 'toggle') document.querySelector('details').open = !document.querySelector('details').open; });</script>`);
+    const src = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    using _url = { [Symbol.dispose]: () => URL.revokeObjectURL(src) };
+    function Preview() {
+      const [height, setHeight] = useState(1437);
+      return (
+        <div style={{ height }}>
+          <HtmlRenderDocument
+            src={src}
+            title="Tall preview"
+            className="size-full"
+            onContentHeight={setHeight}
+          />
+        </div>
+      );
+    }
+    const container = document.createElement("div");
+    container.style.cssText = "height:600px;width:900px;display:flex;flex-direction:column";
+    await using screen = await render(
+      <MessagesTimeline
+        {...props}
+        renderHtmlRender={() => <Preview />}
+        timelineEntries={[
+          {
+            id: "preview",
+            kind: "html-render",
+            createdAt: CREATED_AT,
+            runId: RunId.make("preview-run"),
+            htmlRender: { attachmentId: "preview", title: "Tall preview", height: 1450 },
+          },
+          message("Done", { role: "assistant" }, "preview-done"),
+        ]}
+      />,
+      { container },
+    );
+    const viewport = props.listRef.current!.getScrollableNode()!;
+    const frame = screen.getByTitle("Tall preview").element() as HTMLIFrameElement;
+    await vi.waitFor(() => {
+      expect(frame.clientHeight).toBe(1437);
+      expect(viewport.scrollTop).toBeGreaterThan(0);
+      expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThan(2);
+    });
+    const top = frame.getBoundingClientRect().top;
+    frame.focus();
+    frame.contentWindow!.postMessage("toggle", "*");
+    await vi.waitFor(() => {
+      expect(frame.clientHeight).toBe(2337);
+      expect(frame.getBoundingClientRect().top).toBeCloseTo(top, 0);
+    });
+    frame.contentWindow!.postMessage("toggle", "*");
+    await vi.waitFor(() => {
+      expect(frame.clientHeight).toBe(1437);
+      expect(frame.getBoundingClientRect().top).toBeCloseTo(top, 0);
+    });
+  });
+
   it("keeps the worked-for heading in place when expanded at the bottom", async () => {
     const props = baseProps();
     const runId = RunId.make("completed-run");
@@ -242,17 +395,37 @@ describe("MessagesTimeline work rows", () => {
     // frames, which the fake clock below would freeze.
     await expect.element(heading).toHaveStyle({ pointerEvents: "auto" });
     const viewport = props.listRef.current!.getScrollableNode()!;
-    // Legend keeps rows transparent and unclickable until its initial scroll settles.
+    // Bootstrap can reach the estimated bottom before its rows are measured and
+    // interactive. Let it finish before recording the position we want to keep.
     await vi.waitFor(() => {
+      const button = heading.element();
+      const rect = button.getBoundingClientRect();
+      expect(
+        button.contains(
+          document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
+        ),
+      ).toBe(true);
+      expect(button.checkVisibility({ opacityProperty: true })).toBe(true);
+      expect(props.listRef.current!.getState().sizes.has("entry-final")).toBe(true);
       expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThan(2);
-      expect(heading.element().checkVisibility({ opacityProperty: true })).toBe(true);
     });
     expect(viewport.scrollTop).toBeGreaterThan(0);
     const top = heading.element().getBoundingClientRect().top;
     const height = viewport.scrollHeight;
-    using _timers = fakeTimers();
+    const fadedRowIds: string[] = [];
+    const listening = new AbortController();
+    onTestFinished(() => listening.abort());
+    document.addEventListener(
+      "animationstart",
+      (event) => {
+        if (event.animationName !== "timeline-fold-reveal" || !(event.target instanceof Element))
+          return;
+        const row = event.target.querySelector("[data-timeline-row-id]");
+        fadedRowIds.push(row?.getAttribute("data-timeline-row-id") ?? "");
+      },
+      { signal: listening.signal },
+    );
     await heading.click();
-    await act(() => vi.advanceTimersByTime(1000));
     await vi.waitFor(() => {
       expect(viewport.scrollHeight).toBeGreaterThan(height + 500);
       expect(heading.element().getBoundingClientRect().top).toBeCloseTo(top, 0);
@@ -260,6 +433,236 @@ describe("MessagesTimeline work rows", () => {
         500,
       );
     });
+    await vi.waitFor(() => {
+      expect(fadedRowIds).toEqual(["entry-progress"]);
+      expect(viewport.querySelector("[data-fold-reveal]")).toBeNull();
+    });
+  });
+
+  it("keeps following a streaming turn after a heading is expanded at the bottom", async () => {
+    const props = { ...baseProps(), isWorking: true };
+    const runId = RunId.make("live-run");
+    const container = document.createElement("div");
+    container.style.cssText =
+      "height: min(600px, 100vh); width: 900px; display: flex; flex-direction: column;";
+    const entries = [
+      ...Array.from({ length: 12 }, (_, index) =>
+        message(`Earlier context ${index}`, {}, `context-${index}`),
+      ),
+      message("Progress details\n\n".repeat(50), { role: "assistant", runId }, "progress"),
+      message("Done", { role: "assistant", runId }, "final"),
+    ];
+    await using screen = await render(<MessagesTimeline {...props} timelineEntries={entries} />, {
+      container,
+    });
+    const heading = screen.getByRole("button", { name: /^Worked for/ });
+    await expect.element(heading).toHaveStyle({ pointerEvents: "auto" });
+    const viewport = props.listRef.current!.getScrollableNode()!;
+    const distanceFromEnd = () =>
+      viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+    await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThan(2));
+    await heading.click();
+    await screen.rerender(
+      <MessagesTimeline
+        {...props}
+        timelineEntries={[
+          ...entries,
+          message("Streamed reply\n\n".repeat(40), { role: "assistant", runId }, "streamed"),
+        ]}
+      />,
+    );
+    await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThan(2));
+  });
+
+  it("loads a streamed approval patch when review opens and hides it again", async () => {
+    setup();
+    const itemId = TurnItemId.make("approval-patch");
+    environmentQuery.data = {
+      item: { type: "file_change", id: itemId, diffStr: "@@ -1 +1 @@\n-old\n+proposed" },
+    };
+    onTestFinished(() => setup());
+    await using screen = await renderTimeline([], {
+      onRespondToApproval: async () => {},
+      pendingApprovals: [
+        {
+          requestId: RuntimeRequestId.make("patch-request"),
+          requestKind: "file-change",
+          createdAt: CREATED_AT,
+          detail: "Update two files",
+          responseCapability: "live",
+          files: ["src/one.ts", "src/two.ts"].map((path) => ({
+            path,
+            source: { threadId: ThreadId.make("thread-1"), itemId, revision: "live" },
+          })),
+        },
+      ],
+    });
+    expect(screen.text()).not.toContain("+proposed");
+    await screen.getByRole("button", { name: "Review diff" }).click();
+    await vi.waitFor(() => {
+      expect(screen.getByLabelText("Proposed diff").element().textContent).toContain("+proposed");
+    });
+    expect(screen.getByLabelText("Proposed diff").element().querySelectorAll("pre")).toHaveLength(
+      1,
+    );
+    await screen.getByRole("button", { name: "Hide diff" }).click();
+    await expect.element(screen.getByLabelText("Proposed diff")).not.toBeInTheDocument();
+  });
+
+  it("keeps live assistant text citable and expands the work window below a fixed bar", async () => {
+    const runId = RunId.make("history-run");
+    await using screen = await renderTimeline(
+      [
+        message("Build it", { runId }),
+        ...Array.from({ length: 2000 }, (_, index) =>
+          message(`History answer ${index}`, { runId, role: "assistant" }, `history-${index}`),
+        ),
+        message("Live answer", { runId, role: "assistant", streaming: true }, "live-answer"),
+      ],
+      {
+        isWorking: true,
+        activeTurnStartedAt: CREATED_AT,
+        latestRun: { runId, status: "running", startedAt: CREATED_AT, completedAt: null },
+      },
+    );
+    await expect.element(screen.getByText("Live answer", { exact: true })).toBeVisible();
+    expect(
+      screen
+        .getByText("Live answer", { exact: true })
+        .element()
+        .closest('[data-assistant-citation-source="live-answer"]'),
+    ).not.toBeNull();
+    const bar = screen.getByRole("button", { name: "Open work history" });
+    await expect.element(bar).toHaveAttribute("aria-expanded", "false");
+    const history = screen.getByRole("region", { name: "Work history" }).element();
+    expect(history.clientHeight).toBeGreaterThan(0);
+    expect(history.clientHeight).toBeLessThanOrEqual(220);
+    const mountedSources = () =>
+      screen.container.querySelectorAll("[data-assistant-citation-source]").length;
+    expect(mountedSources()).toBeLessThan(60);
+    const barElement = bar.element();
+    const barTop = barElement.getBoundingClientRect().top;
+    const viewport = history.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+    const fullHeight = viewport.scrollHeight;
+    expect(fullHeight).toBeGreaterThan(2000 * 20);
+    expect(fullHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThanOrEqual(2);
+    const tailSources = mountedSources();
+    const tailAnchor = history.querySelector<HTMLElement>("[data-assistant-citation-source]")!;
+    let tailAnchorTop = 0;
+    await act(() => {
+      viewport.scrollTop = fullHeight - viewport.clientHeight - 400;
+      viewport.dispatchEvent(new Event("scroll"));
+      tailAnchorTop = tailAnchor.getBoundingClientRect().top;
+    });
+    await expect.element(screen.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+    await vi.waitFor(() => expect(mountedSources()).toBeGreaterThan(tailSources));
+    expect(Math.abs(tailAnchor.getBoundingClientRect().top - tailAnchorTop)).toBeLessThanOrEqual(1);
+    await expect.element(bar).toHaveAttribute("aria-expanded", "false");
+    expect(Math.abs(viewport.scrollHeight - fullHeight)).toBeLessThan(fullHeight / 10);
+    expect(mountedSources()).toBeLessThan(70);
+    expect(barElement.getBoundingClientRect().top).toBe(barTop);
+    await screen.getByRole("button", { name: "Jump to latest" }).click();
+    await expect.element(screen.getByText("Live answer", { exact: true })).toBeVisible();
+    await expect
+      .element(screen.getByRole("button", { name: "Jump to latest" }))
+      .not.toBeInTheDocument();
+    await act(() => {
+      viewport.scrollTop = 0;
+      viewport.dispatchEvent(new Event("scroll"));
+    });
+    await expect.element(screen.getByText("History answer 0", { exact: true })).toBeVisible();
+    await vi.waitFor(() => expect(viewport.scrollTop).toBe(0));
+    await screen.getByRole("button", { name: "Jump to latest" }).click();
+    const barTops = new Set<number>();
+    const resizes = new ResizeObserver(() => barTops.add(barElement.getBoundingClientRect().top));
+    resizes.observe(history);
+    using _resizes = { [Symbol.dispose]: () => resizes.disconnect() };
+
+    await bar.click();
+    await expect
+      .element(screen.getByRole("button", { name: "Close work history" }))
+      .toHaveAttribute("aria-expanded", "true");
+    await expect.element(screen.getByText("History answer 0", { exact: true })).toBeInTheDocument();
+    await Promise.all(history.getAnimations().map((animation) => animation.finished));
+    expect(getComputedStyle(history).maxHeight).toBe("none");
+    expect(
+      screen.getByText("History answer 0", { exact: true }).element().getBoundingClientRect().top,
+    ).toBeGreaterThanOrEqual(history.getBoundingClientRect().top);
+    expect(barElement.getBoundingClientRect().top).toBe(barTop);
+    expect([...barTops]).toEqual([barTop]);
+    expect(mountedSources()).toBeLessThan(120);
+
+    await screen.getByRole("button", { name: "Close work history" }).click();
+    await expect.element(barElement).toHaveAttribute("aria-expanded", "false");
+    await Promise.all(history.getAnimations().map((animation) => animation.finished));
+    expect(history.clientHeight).toBeLessThanOrEqual(220);
+    await vi.waitFor(() => expect(mountedSources()).toBeLessThan(60));
+    expect(barElement.getBoundingClientRect().top).toBe(barTop);
+    expect([...barTops]).toEqual([barTop]);
+
+    await bar.click();
+    await expect
+      .element(screen.getByText("History answer 49", { exact: true }))
+      .toBeInTheDocument();
+    await Promise.all(history.getAnimations().map((animation) => animation.finished));
+    expect(screen.container.textContent).not.toContain("History answer 50");
+    await act(() => {
+      screen.getByText("History answer 49", { exact: true }).element().scrollIntoView();
+    });
+    await expect
+      .element(screen.getByText("History answer 99", { exact: true }))
+      .toBeInTheDocument();
+  });
+
+  it("keeps the bar still when work arrives while the history collapses at the bottom", async () => {
+    const runId = RunId.make("collapse-run");
+    const props = {
+      ...baseProps(),
+      isWorking: true,
+      activeTurnStartedAt: CREATED_AT,
+      latestRun: { runId, status: "running" as const, startedAt: CREATED_AT, completedAt: null },
+    };
+    const entries = (steps: number) => [
+      ...Array.from({ length: 40 }, (_, index) =>
+        message(`Earlier ${index}`, {}, `earlier-${index}`),
+      ),
+      message("Build it", { runId }),
+      ...Array.from({ length: steps }, (_, index) =>
+        message(`Step ${index}`, { runId, role: "assistant" }, `step-${index}`),
+      ),
+    ];
+    await using screen = await renderElement(
+      <MessagesTimeline {...props} timelineEntries={entries(30)} />,
+    );
+    const bar = screen.getByRole("button", { name: "Open work history" });
+    await expect.element(bar).toBeVisible();
+    const viewport = props.listRef.current!.getScrollableNode()!;
+    await vi.waitFor(() =>
+      expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThan(2),
+    );
+    const barElement = bar.element();
+    await bar.click();
+    const history = screen.getByRole("region", { name: "Work history" }).element();
+    await expect.element(screen.getByText("Step 0", { exact: true })).toBeInTheDocument();
+    await Promise.all(history.getAnimations().map((animation) => animation.finished));
+    const barTop = barElement.getBoundingClientRect().top;
+    const expandedHeight = history.clientHeight;
+    const barTops = new Set<number>();
+    const resizes = new ResizeObserver(() => barTops.add(barElement.getBoundingClientRect().top));
+    resizes.observe(history);
+    using _resizes = { [Symbol.dispose]: () => resizes.disconnect() };
+    history.style.transitionDuration = "10s";
+
+    await screen.getByRole("button", { name: "Close work history" }).click();
+    await vi.waitFor(() => expect(history.clientHeight).toBeLessThan(expandedHeight - 20));
+    await screen.rerender(<MessagesTimeline {...props} timelineEntries={entries(31)} />);
+    const arrivedHeight = history.clientHeight;
+    await vi.waitFor(() => expect(history.clientHeight).toBeLessThan(arrivedHeight - 60));
+    for (const animation of history.getAnimations()) animation.finish();
+    await vi.waitFor(() =>
+      expect(history.querySelector('[data-slot="scroll-area-viewport"]')).not.toBeNull(),
+    );
+    expect([...barTops]).toEqual([barTop]);
   });
 
   it.each(["delegated", "legacy", "missing"] as const)(
@@ -340,6 +743,44 @@ describe("MessagesTimeline work rows", () => {
 });
 
 describe("MessagesTimeline messages", () => {
+  it.each([0.98, 1.02])("keeps row sizes in layout pixels at scale %s", async (scale) => {
+    const props = baseProps();
+    const entries = [
+      message("A paragraph that wraps across the conversation. ".repeat(100), {
+        role: "assistant",
+      }),
+      message("The next prompt", {}, "next-prompt"),
+    ];
+    const timeline = (resolvedTheme: "light" | "dark") => (
+      <MessagesTimeline {...props} timelineEntries={entries} resolvedTheme={resolvedTheme} />
+    );
+    await using screen = await renderElement(timeline("light"));
+    const first = screen.container.querySelector<HTMLElement>("[data-timeline-row-id]")!;
+    const next = screen.container.querySelector<HTMLElement>(
+      '[data-timeline-row-id="entry-next-prompt"]',
+    )!;
+    const height = first.getBoundingClientRect().height;
+    await vi.waitFor(() =>
+      expect(props.listRef.current!.getState().sizeAtIndex(0)).toBe(Math.round(height)),
+    );
+    await new Promise<void>((resolve) => {
+      const observer = new ResizeObserver(() => {
+        observer.disconnect();
+        resolve();
+      });
+      observer.observe(first);
+    });
+    screen.container.style.transform = `scale(${scale})`;
+    await screen.rerender(timeline("dark"));
+    screen.container.style.transform = "";
+    await vi.waitFor(() => {
+      expect(props.listRef.current!.getState().sizeAtIndex(0)).toBe(Math.round(height));
+      expect(
+        Math.abs(next.getBoundingClientRect().top - first.getBoundingClientRect().bottom),
+      ).toBeLessThanOrEqual(1);
+    });
+  });
+
   it("settles when equally long messages have very different rendered heights", async () => {
     const props = baseProps();
     const tall = message("a\n\n".repeat(6000), { role: "assistant" }, "tall");
@@ -434,6 +875,113 @@ describe("MessagesTimeline messages", () => {
     await expectHeadingInView("Last turn", "Turn 118:");
   });
 
+  it("disables the minimap's next turn button at the bottom of the thread", async () => {
+    setup();
+    const props = baseProps();
+    const entries = Array.from({ length: 16 }, (_, index) => [
+      message(`Question ${index}`, {}, `user-${index}`),
+      message(`Answer ${index}`, { role: "assistant" }, `assistant-${index}`),
+    ]).flat();
+    await using screen = await renderTimeline(entries, props);
+    const viewport = props.listRef.current!.getScrollableNode()!;
+    const strips = () => [
+      ...screen.container.querySelectorAll<HTMLElement>("[data-minimap-strip]"),
+    ];
+    // Several final turns share the last screen, so the current turn is not the last one.
+    await vi.waitFor(() => {
+      expect(viewport.scrollTop).toBeGreaterThan(0);
+      expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThan(2);
+      expect(strips()[0]?.dataset.inView).toBe("false");
+      expect(
+        strips()
+          .slice(-2)
+          .map((strip) => strip.dataset.inView),
+      ).toEqual(["true", "true"]);
+      expect(screen.button("Previous turn")).not.toBeDisabled();
+    });
+
+    expect(screen.button("Next turn")).toBeDisabled();
+
+    viewport.scrollTop -= 30;
+    await vi.waitFor(() => expect(screen.button("Next turn")).not.toBeDisabled());
+    // Legend keeps its initial end anchor until a scroll leaves the end, and re-pins on resize.
+    viewport.scrollTop = 0;
+    await vi.waitFor(() => expect(strips()[0]?.dataset.inView).toBe("true"));
+
+    // Shrinking a detached viewport moves the bottom away without a scroll event.
+    await screen.rerender(
+      <MessagesTimeline {...props} timelineEntries={entries} liveFollowEnabled={false} />,
+    );
+    viewport.scrollTop = viewport.scrollHeight;
+    await vi.waitFor(() => expect(screen.button("Next turn")).toBeDisabled());
+    screen.container.style.height = "600px";
+    await vi.waitFor(() => {
+      expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeGreaterThan(
+        500,
+      );
+      expect(screen.button("Next turn")).not.toBeDisabled();
+    });
+
+    // So does a footer that grows below a detached bottom.
+    viewport.scrollTop = viewport.scrollHeight;
+    await vi.waitFor(() => expect(screen.button("Next turn")).toBeDisabled());
+    await screen.rerender(
+      <MessagesTimeline
+        {...props}
+        timelineEntries={entries}
+        liveFollowEnabled={false}
+        footer={<div style={{ height: 400 }} />}
+      />,
+    );
+    await vi.waitFor(() => {
+      expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeGreaterThan(
+        300,
+      );
+      expect(screen.button("Next turn")).not.toBeDisabled();
+    });
+  });
+
+  it("enables the minimap's next turn button on a thread restored above its bottom", async () => {
+    setup();
+    const base = baseProps();
+    const turns = (prefix: string) =>
+      Array.from({ length: 16 }, (_, index) => [
+        message(`${prefix} question ${index}`, {}, `${prefix}-user-${index}`),
+        message(`${prefix} answer ${index}`, { role: "assistant" }, `${prefix}-assistant-${index}`),
+      ]).flat();
+    const other = "environment-local:thread-minimap-restored";
+    rememberTimelinePosition(
+      other,
+      { rowId: "entry-b-user-4", offsetWithinRow: 0, scrollOffset: 0, atEnd: false },
+      false,
+    );
+    await using screen = await renderElement(
+      <MessagesTimeline {...base} timelineEntries={turns("a")} />,
+    );
+    const viewport = base.listRef.current!.getScrollableNode()!;
+    await vi.waitFor(() => {
+      expect(viewport.scrollTop).toBeGreaterThan(0);
+      expect(screen.button("Next turn")).toBeDisabled();
+    });
+
+    await screen.rerender(
+      <MessagesTimeline
+        {...base}
+        routeThreadKey={other}
+        timelineEntries={turns("b")}
+        liveFollowEnabled={false}
+      />,
+    );
+    await vi.waitFor(() => {
+      const row = screen.container.querySelector('[data-timeline-row-id="entry-b-user-4"]');
+      expect(row).not.toBeNull();
+      expect(
+        Math.abs(row!.getBoundingClientRect().top - viewport.getBoundingClientRect().top),
+      ).toBeLessThanOrEqual(2);
+      expect(screen.button("Next turn")).not.toBeDisabled();
+    });
+  });
+
   it("keeps rows in item order after a reload or thread switch, before any timer runs", async () => {
     setup();
     // NVDA's browse mode keeps the first DOM order it reads, so a timer that sorts rows later is too late.
@@ -525,6 +1073,35 @@ describe("MessagesTimeline messages", () => {
     expect(turns).toEqual(turns.toSorted((a, b) => a - b));
   });
 
+  it("opens standalone skill details and its instructions", async () => {
+    setup();
+    const threadRef = {
+      environmentId: ENVIRONMENT_ID,
+      threadId: ThreadId.make("thread-skill"),
+    };
+    await using screen = await renderTimeline([message("$review")], {
+      routeThreadKey: "environment-local:thread-skill",
+      skills: [
+        {
+          name: "review",
+          displayName: "Review",
+          description: "Reviews the current branch.",
+          path: "/skills/review/SKILL.md",
+          enabled: true,
+        },
+      ],
+    });
+    using openFile = vi
+      .spyOn(useRightPanelStore.getState(), "openFile")
+      .mockImplementation(() => {});
+
+    await userEvent.click(screen.getByRole("button", { name: "Skill Review. Show details" }));
+    await expect.element(page.getByText("Reviews the current branch.")).toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: "View instructions" }));
+
+    expect(openFile).toHaveBeenCalledExactlyOnceWith(threadRef, "/skills/review/SKILL.md");
+  });
+
   it("preserves XML-like tags and comparisons in user messages as text", async () => {
     const source = [
       'Without reading a file, do you have <global-agent-instructions scope="workspace">',
@@ -568,6 +1145,220 @@ describe("MessagesTimeline messages", () => {
     expect(screen.container.innerHTML).not.toContain("javascript:");
     await click(screen.button("Safe details"));
     expect((globalThis as { __t3Xss?: number }).__t3Xss).toBeUndefined();
+  });
+
+  const revealModes = ["inline", "at-end", "delayed", "grouped-delayed", "grouped-end"];
+  it.each(revealModes)("reveals %s output", async (mode) => {
+    const inline = mode === "inline" || mode === "at-end";
+    setup();
+    environmentQuery.data =
+      mode === "grouped-end"
+        ? {
+            output: { text: `${"output line\n".repeat(10)}TOOL_INPUT_END`, truncated: false },
+            running: false,
+          }
+        : null;
+    environmentQuery.error = null;
+    const props = baseProps();
+    const composerOverlayHeight = mode === "grouped-end" ? 140 : 200;
+    const tallEntries = Array.from({ length: 12 }, (_, index) =>
+      message(
+        `Message ${index}\n\n${"Long paragraph. ".repeat(80)}`,
+        { role: "assistant" },
+        `tall-${index}`,
+      ),
+    );
+    const projectedItem = makeStreamingTimelineFixture().visibleTurnItems[1]!;
+    const source = {
+      detail: () => Atom.make(AsyncResult.initial()),
+      commandOutput: () => Atom.make(AsyncResult.initial()),
+    };
+    let outerGrowth = false;
+    let routeThreadKey = props.routeThreadKey;
+    const timeline = () => (
+      <MessagesTimeline
+        {...props}
+        routeThreadKey={routeThreadKey}
+        liveFollowEnabled={false}
+        {...(inline
+          ? {}
+          : {
+              turnItemSource: {
+                detail: () => source.detail(),
+                commandOutput: () => source.commandOutput(),
+              },
+            })}
+        contentInsetEndAdjustment={composerOverlayHeight}
+        timelineEntries={[
+          ...tallEntries.slice(0, 6),
+          {
+            id: "tool-near-composer",
+            kind: "work",
+            createdAt: CREATED_AT,
+            entry: {
+              id: "tool-near-composer",
+              createdAt: CREATED_AT,
+              label: "Example tool",
+              toolTitle: "Example tool",
+              tone: "tool",
+              itemType: "dynamic_tool",
+              toolLifecycleStatus: "completed",
+              toolData: { input: { query: `${"x".repeat(1200)} TOOL_INPUT_END` } },
+              ...(inline
+                ? {}
+                : {
+                    itemType: "command_execution",
+                    projectedItem,
+                    structuredPayload: projectedItem.item,
+                  }),
+            },
+          },
+          ...(mode.startsWith("grouped-")
+            ? [
+                {
+                  id: "another-tool",
+                  kind: "work" as const,
+                  createdAt: CREATED_AT,
+                  entry: {
+                    id: "another-tool",
+                    createdAt: CREATED_AT,
+                    label: "Other tool",
+                    tone: "tool" as const,
+                    itemType: "dynamic_tool" as const,
+                    toolLifecycleStatus: "completed" as const,
+                    toolData: { input: { query: "other" } },
+                  },
+                },
+              ]
+            : []),
+          ...(mode === "grouped-end"
+            ? [message("Completed.", { role: "assistant" }, "final-message")]
+            : mode === "at-end"
+              ? [message("Done.", { role: "assistant" }, "final-message")]
+              : tallEntries.slice(6)),
+          ...(outerGrowth
+            ? [message("Later output\n\n".repeat(20), { role: "assistant" }, "outer-growth")]
+            : []),
+        ]}
+      />
+    );
+    await using screen = await renderElement(
+      mode === "grouped-delayed" ? (
+        <MessagesTimeline {...props} timelineEntries={[message("Previous thread")]} />
+      ) : (
+        timeline()
+      ),
+    );
+    if (mode === "grouped-end") screen.container.style.height = "648px";
+    await vi.waitFor(() => expect(props.listRef.current?.getScrollableNode()).toBeTruthy());
+    const viewport = props.listRef.current!.getScrollableNode()!;
+    if (mode === "grouped-delayed") {
+      routeThreadKey = `${routeThreadKey}-switched`;
+      await screen.rerender(timeline());
+      await vi.waitFor(() => expect(viewport.scrollHeight).toBeGreaterThan(3000));
+      await act(() => viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 })));
+    }
+    if (mode.startsWith("grouped-")) {
+      await act(() => {
+        void props.listRef.current!.scrollToIndex({ index: 6, animated: false });
+      });
+      await vi.waitFor(() =>
+        expect(
+          screen.container.querySelector('[data-timeline-row-kind="work-toggle"] button'),
+        ).not.toBeNull(),
+      );
+      const group = () =>
+        screen.container.querySelector<HTMLElement>(
+          '[data-timeline-row-kind="work-toggle"] button',
+        )!;
+      await click(group());
+      await vi.waitFor(() =>
+        expect(
+          screen.container.querySelector('[data-work-entry-id="tool-near-composer"]'),
+        ).not.toBeNull(),
+      );
+      if (mode === "grouped-delayed") {
+        await click(
+          screen.container.querySelector<HTMLElement>('[data-work-entry-id="tool-near-composer"]')!,
+        );
+        await vi.waitFor(() => expect(screen.text()).toContain("Loading output"));
+        await click(group());
+      }
+    }
+    const header = () => {
+      if (mode === "grouped-end")
+        return screen.container.querySelector<HTMLElement>(
+          '[data-work-entry-id="tool-near-composer"]',
+        )!;
+      if (mode === "grouped-delayed")
+        return screen.container.querySelector<HTMLElement>(
+          '[data-timeline-row-kind="work-toggle"] button',
+        )!;
+      const rows = screen.container.querySelectorAll<HTMLElement>(
+        '[data-timeline-row-kind="work"] [role="button"]',
+      );
+      if (!rows[0]) throw new Error(screen.text());
+      return rows[0];
+    };
+    const visibleBottom = () => viewport.getBoundingClientRect().bottom - composerOverlayHeight;
+    await act(() => {
+      void props.listRef.current!.scrollToIndex({ index: 6, animated: false });
+    });
+    if (mode === "at-end") {
+      await act(() => {
+        void props.listRef.current!.scrollToEnd({ animated: false });
+      });
+      await vi.waitFor(() =>
+        expect(resolveTimelineIsAtEnd(props.listRef.current!.getState())).toBe(true),
+      );
+    } else {
+      await vi.waitFor(async () => {
+        await act(() => {
+          viewport.scrollTop += header().getBoundingClientRect().bottom - (visibleBottom() - 8);
+          viewport.dispatchEvent(new Event("scroll"));
+        });
+        expect(resolveTimelineIsAtEnd(props.listRef.current!.getState())).toBe(false);
+        expect(header().getBoundingClientRect().bottom).toBeLessThanOrEqual(visibleBottom());
+        expect(header().getBoundingClientRect().top).toBeGreaterThan(
+          viewport.getBoundingClientRect().top,
+        );
+      });
+    }
+
+    const collapsedScrollTop = viewport.scrollTop;
+    using scrollBy = vi.spyOn(viewport, "scrollBy");
+    // The nested row can measure before the outer scroller gains its new range.
+    if (mode === "grouped-delayed") scrollBy.mockImplementationOnce(() => {});
+    await click(header());
+    if (mode === "grouped-delayed") {
+      await vi.waitFor(() => expect(scrollBy).toHaveBeenCalled());
+      outerGrowth = true;
+      await screen.rerender(timeline());
+      await vi.waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(collapsedScrollTop));
+    }
+    if (!inline && mode !== "grouped-end") {
+      await vi.waitFor(() =>
+        expect(header().getBoundingClientRect().bottom).toBeLessThanOrEqual(visibleBottom() + 1),
+      );
+      await vi.waitFor(() => expect(screen.text()).toContain("Loading output"));
+      environmentQuery.data = {
+        output: { text: `${"output line\n".repeat(20)}TOOL_INPUT_END`, truncated: false },
+        running: false,
+      };
+      await screen.rerender(timeline());
+    }
+    const inputEnd = () =>
+      Array.from(screen.container.querySelectorAll<HTMLElement>("*")).findLast((element) =>
+        element.textContent?.includes("TOOL_INPUT_END"),
+      )!;
+    await vi.waitFor(() =>
+      expect(inputEnd().getBoundingClientRect().bottom).toBeLessThanOrEqual(visibleBottom() + 1),
+    );
+    await vi.waitFor(() =>
+      expect(header().getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        viewport.getBoundingClientRect().top,
+      ),
+    );
   });
 });
 
@@ -615,7 +1406,7 @@ describe("MessagesTimeline usage limit notice", () => {
   it("labels the retry time with the viewer's timezone", async () => {
     await using screen = await renderTimeline(usageLimitEntries("2026-03-17T19:30:00.000Z"));
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    expect(screen.text()).toMatch(/Usage limit reached\. Retry after .+\./);
+    expect(screen.text()).toMatch(/Retry after .+\./);
     expect(screen.text()).toContain(`(${timeZone})`);
   });
 
@@ -689,6 +1480,7 @@ describe("MessagesTimeline citations", () => {
       attemptOrdinal: ordinal,
       rootNodeId: `node-${id}` as never,
       status,
+      startedAt: null,
       completedAt: null,
     });
     const superseded = attempt("attempt-1", 1, "superseded");
@@ -1228,21 +2020,117 @@ describe("MessagesTimeline thread find", () => {
 });
 
 describe("compact reasoning math", () => {
-  it("keeps formulas while flattening compact reasoning previews", () => {
-    const tree = parseMarkdownWithMath("## Reasoning\n\nUse **norm** $|x|$ and \\[x^2\\]");
+  it.each([
+    [
+      "## Reasoning\n\nUse **norm** $|x|$ and \\[x^2\\]",
+      [
+        ["text", "Reasoning Use norm "],
+        ["inlineMath", "|x|"],
+        ["text", " and "],
+        ["inlineMath", "x^2"],
+      ],
+    ],
+    [
+      "  Lead   **bold**\n\n   *em*  `code`  \n\n- one\n-   two\n\n> quote\n> more\n\ntrail   ",
+      [["text", "Lead bold em code one two quote more trail"]],
+    ],
+    [
+      "$a$ starts, ends with $b$",
+      [
+        ["inlineMath", "a"],
+        ["text", " starts, ends with "],
+        ["inlineMath", "b"],
+      ],
+    ],
+    [
+      "before   $x$\n\n$$\ny\n$$\n\n   after",
+      [
+        ["text", "before "],
+        ["inlineMath", "x"],
+        ["text", " "],
+        ["inlineMath", "y"],
+        ["text", " after"],
+      ],
+    ],
+    [
+      "a *b*$c$**d** e",
+      [
+        ["text", "a b"],
+        ["inlineMath", "c"],
+        ["text", "d e"],
+      ],
+    ],
+    [
+      "$a$![](x.png)$b$",
+      [
+        ["inlineMath", "a"],
+        ["text", ""],
+        ["inlineMath", "b"],
+      ],
+    ],
+    [
+      "| a | b |\n| - | - |\n| $x$ | y  z |",
+      [
+        ["text", "a b "],
+        ["inlineMath", "x"],
+        ["text", " y z"],
+      ],
+    ],
+    [
+      'See [a  link](https://example.com "t") ![alt   text](img.png) <b>bold</b> <!-- c -->\n\n[ref]: https://example.com\n\n:::note\nbody\n:::',
+      [["text", "See a link alt text bold :::note body :::"]],
+    ],
+    [
+      "line one\r\nline two\r\n\r\nnext  nbsp　wide 😀𝑥 end",
+      [["text", "line one line two next nbsp wide 😀𝑥 end"]],
+    ],
+    ["\\$5 and \\$6, \\*not em\\*", [["text", "$5 and $6, *not em*"]]],
+    ["hard  \nbreak\\\nagain", [["text", "hard break again"]]],
+    ["<div>only html</div>", [["text", "Reasoning"]]],
+  ])("keeps formulas while flattening compact reasoning previews: %j", (source, expected) => {
+    const tree = parseMarkdownWithMath(source);
     remarkThoughtPreview("Reasoning")(tree);
-    expect(tree.children.map((node) => node.type)).toEqual([
-      "text",
-      "inlineMath",
-      "text",
-      "inlineMath",
-    ]);
-    expect(tree.children.map((node) => ("value" in node ? node.value : null))).toEqual([
-      "Reasoning Use norm ",
-      "|x|",
-      " and ",
-      "x^2",
-    ]);
+    expect(tree.children.map((node) => [node.type, "value" in node ? node.value : null])).toEqual(
+      expected,
+    );
+  });
+
+  it("stops reading the tree once the preview is full", () => {
+    const beyondCap = (): string => {
+      throw new Error("read beyond cap");
+    };
+    const head = "x".repeat(THOUGHT_PREVIEW_MAX_LENGTH - 2);
+    const tree: Root = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            { type: "text", value: head },
+            { type: "strong", children: [{ type: "text", value: "yz beyond" }] },
+            {
+              type: "inlineMath",
+              get value() {
+                return beyondCap();
+              },
+            },
+          ],
+        },
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "text",
+              get value() {
+                return beyondCap();
+              },
+            },
+          ],
+        },
+      ],
+    };
+    remarkThoughtPreview("Reasoning")(tree);
+    expect(tree.children).toEqual([{ type: "text", value: `${head}yz` }]);
   });
 });
 
@@ -1446,31 +2334,110 @@ it("keeps concurrent approvals actionable outside collapsed work and restores se
     });
   const props = baseProps();
   const onRespondToApproval = vi.fn(async () => {});
-  const ui = (overrides: Partial<TimelineProps> = {}) => (
-    <MessagesTimeline
-      {...props}
-      timelineEntries={entries()}
-      pendingApprovals={approvals}
-      canOperateThread
-      onRespondToApproval={onRespondToApproval}
-      isWorking
-      runningRunId={fixture.runId}
-      {...overrides}
-    />
-  );
+  const projection = makeThreadProjectionFixture();
+  function ApprovalTimeline({ overrides }: { overrides: Partial<TimelineProps> }) {
+    const timelineProps = {
+      ...props,
+      timelineEntries: entries(),
+      pendingApprovals: approvals,
+      canOperateThread: true,
+      onRespondToApproval,
+      isWorking: true,
+      runningRunId: fixture.runId,
+      ...overrides,
+    };
+    const promptRef = useRef("");
+    const composerRef = useRef(null);
+    const requests = usePendingThreadRequests({
+      environmentId: ENVIRONMENT_ID,
+      activeThreadId: projection.thread.id,
+      serverProjection: {
+        ...projection,
+        runtimeRequests: timelineProps.pendingApprovals.map((approval) => ({
+          id: approval.requestId,
+          nodeId: NodeId.make(approval.requestId),
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: approval.requestKind,
+          status: "pending",
+          responseCapability:
+            approval.responseCapability === "live"
+              ? { type: "live", providerSessionId: ProviderSessionId.make("approval-session") }
+              : { type: "not_resumable", reason: "Provider process is gone" },
+          createdAt: DateTime.makeUnsafe(approval.createdAt),
+          resolvedAt: null,
+        })),
+        turnItems: timelineProps.pendingApprovals.map((approval) => ({
+          ...sourceItem,
+          type: "approval_request",
+          id: TurnItemId.make(approval.requestId),
+          requestId: approval.requestId,
+          requestKind: approval.requestKind,
+          prompt: approval.detail ?? "",
+          reason: approval.reason,
+          fullAccessOverride: approval.fullAccessOverride,
+          appName: approval.appName,
+          options: approval.options,
+        })),
+      },
+      supportsQuestionAttachments: false,
+      composerDraftTarget: { environmentId: ENVIRONMENT_ID, threadId: projection.thread.id },
+      setComposerDraftPrompt: () => {},
+      promptRef,
+      composerRef,
+      setThreadError: () => {},
+    });
+    const active = requests.activePendingApproval;
+    return (
+      <>
+        <MessagesTimeline {...timelineProps} pendingApprovals={requests.pendingApprovals} />
+        <a href="#approval-test">Approval test link</a>
+        <span role="link" tabIndex={0}>
+          Approval role link
+        </span>
+        <details>
+          <summary>Approval summary</summary>Details
+        </details>
+        <div contentEditable="plaintext-only" aria-label="Approval editable" />
+        {active && !timelineProps.heldApprovalRequestIds?.has(active.requestId) ? (
+          <ComposerApprovalPanel
+            key={active.requestId}
+            approval={active}
+            count={requests.pendingApprovals.length}
+            disabled={!timelineProps.canOperateThread}
+            isResponding={timelineProps.respondingRequestIds?.includes(active.requestId) ?? false}
+            onRespond={onRespondToApproval}
+          />
+        ) : null}
+      </>
+    );
+  }
+  const ui = (overrides: Partial<TimelineProps> = {}) => <ApprovalTimeline overrides={overrides} />;
   await using screen = await renderElement(ui());
+  for (const target of [
+    screen.getByRole("link", { name: "Approval test link" }),
+    screen.getByRole("link", { name: "Approval role link" }),
+    screen.getByText("Approval summary"),
+    screen.getByLabelText("Approval editable"),
+  ]) {
+    const key = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    target.element().dispatchEvent(key);
+    expect(key.defaultPrevented).toBe(false);
+  }
+  expect(onRespondToApproval).not.toHaveBeenCalled();
   await expect.element(screen.getByRole("group", { name: "Command approval" })).toBeVisible();
   await expect
     .element(screen.getByRole("group", { name: "App permission approval" }))
     .toBeVisible();
-  await expect.element(screen.getByText(approvals[0]!.detail!, { exact: true })).toBeVisible();
-  await expect.element(screen.getByText("Needs permission to run the command")).toBeVisible();
+  const commandRow = screen.getByRole("group", { name: "Command approval" });
+  await expect.element(commandRow.getByText(approvals[0]!.detail!, { exact: true })).toBeVisible();
+  await expect.element(commandRow.getByText("Needs permission to run the command")).toBeVisible();
   await vi.waitFor(() => {
     expect(
       getComputedStyle(screen.getByLabelText("Command", { exact: true }).element()).userSelect,
     ).toBe("text");
     expect(
-      getComputedStyle(screen.getByText("Needs permission to run the command").element())
+      getComputedStyle(commandRow.getByText("Needs permission to run the command").element())
         .userSelect,
     ).toBe("text");
   });
@@ -1478,18 +2445,19 @@ it("keeps concurrent approvals actionable outside collapsed work and restores se
   await click(screen.button("Why am I being asked this?"));
   await expect.element(page.getByText(/an ask rule in the agent's own settings/)).toBeVisible();
   await click(screen.button("Why am I being asked this?"));
-  await click(screen.buttons("More approval options")[1]!);
-  await expect.element(page.getByRole("menuitem", { name: "Always allow Safari" })).toBeVisible();
-  await page.getByRole("menuitem", { name: "Always allow Safari" }).click();
-  expect(onRespondToApproval).toHaveBeenLastCalledWith(appRequest, "acceptAlways");
-  await click(screen.buttons("More approval options")[0]!);
+  await expect.element(screen.getByText("1/2", { exact: true })).toBeVisible();
+  await click(screen.button("More approval options"));
   await expect.element(page.getByRole("menuitem", { name: "Cancel", exact: true })).toBeVisible();
-  await page.getByRole("menuitem", { name: "Always allow this session" }).click();
+  await userEvent.keyboard("{Escape}");
+  const sessionToggle = screen.getByRole("button", { name: "Always allow this session" });
+  await sessionToggle.click();
+  await expect.element(sessionToggle).toHaveAttribute("aria-pressed", "true");
+  await screen.getByRole("button", { name: "Approve", exact: true }).click();
   expect(onRespondToApproval).toHaveBeenLastCalledWith(commandRequest, "acceptForSession");
-  await click(screen.button("Decline"));
+  await sessionToggle.click();
+  await expect.element(sessionToggle).toHaveAttribute("aria-pressed", "false");
+  await screen.getByRole("button", { name: "Decline", exact: true }).click();
   expect(onRespondToApproval).toHaveBeenLastCalledWith(commandRequest, "decline");
-  await click(screen.button("Allow once"));
-  expect(onRespondToApproval).toHaveBeenLastCalledWith(appRequest, "accept");
   for (const timelineEntries of [entries(), []]) {
     await screen.rerender(
       ui({ timelineEntries, heldApprovalRequestIds: new Set([commandRequest]) }),
@@ -1497,19 +2465,32 @@ it("keeps concurrent approvals actionable outside collapsed work and restores se
     await expect
       .element(screen.getByRole("group", { name: "Command approval" }))
       .not.toBeInTheDocument();
-    await vi.waitFor(() => expect(screen.buttons("Approve")).toHaveLength(0));
     await expect
-      .element(screen.getByRole("button", { name: "Allow once", exact: true }))
+      .element(screen.getByRole("button", { name: "Approve", exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("group", { name: "App permission approval" }))
       .toBeVisible();
     await screen.rerender(ui({ timelineEntries }));
     await expect.element(screen.getByRole("group", { name: "Command approval" })).toBeVisible();
-    await vi.waitFor(() => expect(screen.buttons("Approve")).toHaveLength(1));
+    await expect
+      .element(screen.getByRole("button", { name: "Approve", exact: true }))
+      .toBeVisible();
   }
   await screen.rerender(ui({ timelineEntries: [], isWorking: false }));
   await expect.element(screen.getByRole("group", { name: "Command approval" })).toBeVisible();
-  await click(screen.button("Approve"));
+  await screen.getByRole("button", { name: "Approve", exact: true }).click();
   expect(onRespondToApproval).toHaveBeenLastCalledWith(commandRequest, "accept");
-  await click(screen.button("Deny"));
+  // The resolved request leaves the projection, so the real tray queue advances.
+  await screen.rerender(ui({ pendingApprovals: [approvals[1]!] }));
+  await expect.element(screen.getByRole("button", { name: "Allow once" })).toBeVisible();
+  await click(screen.button("More approval options"));
+  await expect.element(page.getByRole("menuitem", { name: "Always allow Safari" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Always allow Safari" }).click();
+  expect(onRespondToApproval).toHaveBeenLastCalledWith(appRequest, "acceptAlways");
+  await screen.getByRole("button", { name: "Allow once", exact: true }).click();
+  expect(onRespondToApproval).toHaveBeenLastCalledWith(appRequest, "accept");
+  await screen.getByRole("button", { name: "Decline", exact: true }).click();
   expect(onRespondToApproval).toHaveBeenLastCalledWith(appRequest, "decline");
   await screen.rerender(
     ui({
@@ -1530,6 +2511,9 @@ it("keeps concurrent approvals actionable outside collapsed work and restores se
   );
   await screen.rerender(ui({ respondingRequestIds: [commandRequest] }));
   await expect.element(screen.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
+  await screen.rerender(
+    ui({ pendingApprovals: [approvals[1]!], respondingRequestIds: [commandRequest] }),
+  );
   await expect
     .element(screen.getByRole("button", { name: "Allow once", exact: true }))
     .toBeEnabled();
@@ -1539,7 +2523,7 @@ it("keeps concurrent approvals actionable outside collapsed work and restores se
   await expect
     .element(screen.getByText("Provider process is gone. Interrupt or restart the run to respond."))
     .toBeVisible();
-  await vi.waitFor(() => expect(screen.buttons("Approve")).toHaveLength(0));
+  await expect.element(screen.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
   await screen.rerender(
     ui({ pendingApprovals: [], timelineEntries: entries(true), isWorking: false }),
   );
@@ -1554,4 +2538,226 @@ it("keeps concurrent approvals actionable outside collapsed work and restores se
   await expect
     .element(screen.getByRole("button", { name: "Open the current tab", exact: true }))
     .toBeVisible();
+});
+
+describe("MessagesTimeline work rows", () => {
+  it("keeps working through an async question and pauses only when it blocks", async () => {
+    const runId = RunId.make("async-question-run");
+    const pendingRequest = {
+      kind: "question" as const,
+      label: "Which approach should I use?",
+      createdAt: CREATED_AT,
+      blocking: false,
+    };
+    const props = {
+      ...baseProps(),
+      timelineEntries: [message("Continue working", { runId })],
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnStartedAt: CREATED_AT,
+      latestRun: { runId, status: "running" as const, startedAt: CREATED_AT, completedAt: null },
+      pendingRequest,
+    };
+    await using screen = await renderElement(<MessagesTimeline {...props} />);
+    expect(screen.text()).toContain("Working for");
+    expect(screen.text()).not.toContain("Paused at");
+
+    await screen.rerender(
+      <MessagesTimeline {...props} pendingRequest={{ ...pendingRequest, blocking: true }} />,
+    );
+    expect(screen.text()).toContain("Paused at");
+    expect(screen.text()).toContain(pendingRequest.label);
+
+    await screen.rerender(<MessagesTimeline {...props} />);
+    expect(screen.text()).toContain("Working for");
+    expect(screen.text()).not.toContain("Paused at");
+  });
+
+  it.each(["run-backed", "runless"] as const)(
+    "folds the %s working history once it outgrows the collapsed window and keeps it open as the turn fold",
+    async (kind) => {
+      const runId = kind === "runless" ? null : RunId.make("growing-run");
+      const entries = (count: number) => [
+        message("Build it", { runId }),
+        ...Array.from({ length: count }, (_, index) =>
+          message(`Step ${index}`, { runId, role: "assistant" }, `step-${index}`),
+        ),
+      ];
+      const props = {
+        ...baseProps(),
+        isWorking: true,
+        runlessWorkActive: runId === null,
+        activeTurnStartedAt: CREATED_AT,
+        latestRun:
+          runId === null
+            ? null
+            : { runId, status: "running" as const, startedAt: CREATED_AT, completedAt: null },
+      };
+      await using screen = await renderElement(
+        <MessagesTimeline {...props} timelineEntries={entries(2)} />,
+      );
+      await expect.element(screen.getByText("Step 1", { exact: true })).toBeVisible();
+      expect(screen.buttons(/work history/)).toEqual([]);
+      const label = screen
+        .getByText(/^Working for/)
+        .element()
+        .closest("button")!;
+      expect(label.disabled).toBe(true);
+      expect(label.hasAttribute("aria-expanded")).toBe(false);
+
+      await screen.rerender(<MessagesTimeline {...props} timelineEntries={entries(30)} />);
+      await expect
+        .element(screen.getByRole("button", { name: "Open work history" }))
+        .toHaveAttribute("aria-expanded", "false");
+
+      await screen.getByRole("button", { name: "Open work history" }).click();
+      await expect
+        .element(screen.getByRole("button", { name: "Close work history" }))
+        .toHaveAttribute("aria-expanded", "true");
+      await screen.rerender(
+        <MessagesTimeline
+          {...props}
+          timelineEntries={entries(30)}
+          isWorking={false}
+          runlessWorkActive={false}
+          latestRun={
+            props.latestRun && { ...props.latestRun, status: "completed", completedAt: CREATED_AT }
+          }
+        />,
+      );
+      await expect
+        .element(screen.getByRole("button", { name: /^Worked for/ }))
+        .toHaveAttribute("aria-expanded", "true");
+    },
+  );
+
+  it("stops showing Thinking in the working window when the provider turn ends", async () => {
+    const runId = RunId.make("ended-provider-run");
+    const props = {
+      ...baseProps(),
+      timelineEntries: [message("Continue the queue", { runId })],
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnStartedAt: CREATED_AT,
+      latestRun: { runId, status: "running" as const, startedAt: CREATED_AT, completedAt: null },
+    };
+    await using screen = await renderElement(<MessagesTimeline {...props} />);
+    expect(screen.text()).toContain("Thinking");
+
+    await screen.rerender(
+      <MessagesTimeline {...props} latestRun={{ ...props.latestRun, turnEnded: true }} />,
+    );
+    expect(screen.text()).not.toContain("Thinking");
+    expect(screen.text()).toContain("Working for");
+  });
+
+  it("updates reset labels across midnight and expires snooze at the deadline", async () => {
+    const now = new Date(2026, 9, 18, 23, 59, 30);
+    const resetAt = new Date(2026, 9, 19, 0, 0, 15).toISOString();
+    const runId = RunId.make("limited-run");
+    using _timers = fakeTimers({ now });
+    await using screen = await renderTimeline(
+      [
+        message("Build it", { runId }),
+        work("usage-limit", {
+          runId,
+          label: "Usage limit reached.",
+          tone: "error",
+          itemType: "error",
+          toolLifecycleStatus: "failed",
+          projectedItem: v2Item("error", {
+            runId,
+            status: "failed",
+            failure: { class: "usage_limit", message: "Limit reached", resetAt },
+          }),
+        }),
+      ],
+      {
+        latestRun: { runId, status: "failed", startedAt: CREATED_AT, completedAt: CREATED_AT },
+        usageLimit: { runId, resetAt, snoozed: false, onToggleSnooze: vi.fn() },
+      },
+    );
+    expect(screen.text()).toContain("resumes tomorrow at ");
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(screen.text()).toContain("resumes ");
+    expect(screen.text()).not.toContain("tomorrow at ");
+    await act(async () => vi.advanceTimersByTimeAsync(14_999));
+    expect(screen.buttons("Snooze")).toHaveLength(1);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(screen.text()).not.toContain("resumes ");
+    expect(screen.buttons("Snooze")).toHaveLength(0);
+  });
+
+  it("expands every background group for a cited run and allows collapsing them again", async () => {
+    const fixture = makeStreamingTimelineFixture("Cited response after the second update.");
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: fixture.visibleTurnItems
+        .filter(
+          (row) =>
+            row.item.type === "user_message" ||
+            (row.item.type === "assistant_message" && row.item.runId === fixture.runId),
+        )
+        .map((row): OrchestrationV2ProjectedTurnItem => ({
+          ...row,
+          item:
+            row.item.type === "user_message"
+              ? {
+                  ...row.item,
+                  runId: fixture.runId,
+                  type: "notification",
+                  source: { kind: "background_task" },
+                  outcome: "updated",
+                  summary: "Background task updated",
+                }
+              : row.item.type === "assistant_message"
+                ? { ...row.item, status: "completed", streaming: false }
+                : row.item,
+        })),
+      optimisticMessages: [],
+    });
+    const feedback = message("Feedback sent between updates.") as Extract<
+      Entry,
+      { kind: "message" }
+    >;
+    const timelineEntries = [entries[0]!, feedback, ...entries.slice(1)];
+    const props = { ...baseProps(), timelineEntries };
+    const citationRequest = {
+      key: "second-background-group",
+      citation: {
+        version: 1 as const,
+        environmentId: ENVIRONMENT_ID,
+        threadId: fixture.threadId,
+        messageId: MessageId.make("live-assistant"),
+        text: "Cited response",
+        start: 0,
+        end: 14,
+        prefix: "",
+        suffix: "",
+      },
+    };
+    await using screen = await renderElement(<MessagesTimeline {...props} />);
+    const groups = () => screen.buttons("1 wake-up: Background task updated");
+    await vi.waitFor(() =>
+      expect(groups().map((node) => node.getAttribute("aria-expanded"))).toEqual([
+        "false",
+        "false",
+      ]),
+    );
+    expect(screen.text()).toContain(feedback.message.text);
+    expect(screen.text()).toContain("Cited response");
+
+    await screen.rerender(<MessagesTimeline {...props} citationRequest={citationRequest} />);
+    await vi.waitFor(() =>
+      expect(groups().map((node) => node.getAttribute("aria-expanded"))).toEqual(["true", "true"]),
+    );
+    expect(screen.text()).toContain("Cited response");
+
+    await screen.rerender(<MessagesTimeline {...props} />);
+    await click(groups()[1]!);
+    await vi.waitFor(() =>
+      expect(groups().map((node) => node.getAttribute("aria-expanded"))).toEqual(["true", "false"]),
+    );
+    expect(screen.text()).toContain("Cited response");
+    expect(screen.text()).toContain(feedback.message.text);
+  });
 });

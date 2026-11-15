@@ -1,5 +1,6 @@
 import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { HttpClient } from "effect/http";
 import { IssueTrackerHost } from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
@@ -13,8 +14,7 @@ export function makeJiraTransport(
   return JiraApi.make.pipe(
     Effect.provideService(HttpClient.HttpClient, http),
     Effect.provideService(IssueTrackerHost, host),
-    Effect.provide(SourceControlRateLimit.layer),
-    Effect.provide(Digest.layerWebCrypto),
+    Effect.provide(Layer.mergeAll(SourceControlRateLimit.layer, Digest.layerWebCrypto)),
   );
 }
 

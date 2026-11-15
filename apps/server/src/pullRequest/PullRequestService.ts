@@ -118,6 +118,15 @@ function supersedesReading(current: PullRequestReading | undefined, next: PullRe
   return (next.observedAt ?? -Infinity) >= (current.observedAt ?? -Infinity);
 }
 
+// Retry a shared flight canceled by its previous reader after that flight leaves the cache.
+const getShared = <Key, A, E, R>(cache: Cache.Cache<Key, A, E, R>, key: Key) =>
+  Cache.get(cache, key).pipe(
+    Effect.catchCauseIf(
+      (cause) => Cause.hasInterruptsOnly(cause),
+      (_cause) => Cache.get(cache, key),
+    ),
+  );
+
 // Providers request one extra row; 99 stays within GitHub/GitLab's 100-row API limit.
 const DEFAULT_REPOSITORY_LIST_LIMIT = 99;
 const REPOSITORY_CONCURRENCY = 12;
@@ -236,6 +245,8 @@ export class PullRequestService extends Context.Service<
     readonly activity: (
       input: PullRequestRef,
     ) => Effect.Effect<PullRequestActivity, PullRequestError>;
+    /** Emits when the host reports a change; empty where the host has no event feed. */
+    readonly changes: (input: PullRequestRef) => Stream.Stream<void>;
     readonly threadComments: (
       input: PullRequestThreadCommentsInput,
     ) => Effect.Effect<PullRequestThreadCommentsResult, PullRequestError>;
@@ -342,6 +353,7 @@ interface WorkspaceProjects {
     { readonly kind: SourceControlProviderKind; readonly projectCount: number }
   >;
   readonly viewerRoots: ReadonlyMap<string, ReadonlyArray<string>>;
+  readonly refinedProjectIdsByHost: ReadonlyMap<string, ReadonlyArray<ProjectId>>;
 }
 
 // Inherited by fibers forked inside the scope, so it is closed, not just dropped, when the scope ends.
@@ -556,6 +568,10 @@ function withRateLimitBackoff(
             api.getChangeRequestWatchFingerprint,
           ),
         }),
+    // A long-lived feed, not a read: the quota guard would hold its lease for hours.
+    ...(api.changeRequestEvents === undefined
+      ? {}
+      : { changeRequestEvents: api.changeRequestEvents }),
     getChangeRequestActivity: wrap("getChangeRequestActivity", api.getChangeRequestActivity),
     ...(api.getReviewThreadComments === undefined
       ? {}
@@ -910,6 +926,7 @@ export const make = Effect.gen(function* () {
           { kind: SourceControlProviderKind; projectCount: number }
         >();
         const viewerRoots = new Map<string, string[]>();
+        const refinedProjectIdsByHost = new Map<string, ProjectId[]>();
         const seen = new Set<string>();
         for (const project of projects) {
           if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
@@ -929,6 +946,11 @@ export const make = Effect.gen(function* () {
           const host = remote?.host ?? sourceControlDefinitions.changeRequestHost(identity, kind);
           if (filter.host !== undefined && host !== filter.host.toLowerCase()) {
             continue;
+          }
+          if (host !== sourceControlDefinitions.changeRequestHost(identity, identity.provider)) {
+            const projectIds = refinedProjectIdsByHost.get(host);
+            if (projectIds === undefined) refinedProjectIdsByHost.set(host, [project.id]);
+            else projectIds.push(project.id);
           }
           const registered = registry.get(kind);
           const api = registered?.servesHost?.(host) === false ? null : registered;
@@ -963,7 +985,7 @@ export const make = Effect.gen(function* () {
                 : sourceControlDefinitions.canonicalRepositoryKey(repositoryKey.toLowerCase()),
           });
         }
-        return { supported, unimplemented, viewerRoots };
+        return { supported, unimplemented, viewerRoots, refinedProjectIdsByHost };
       }),
     );
 
@@ -1070,6 +1092,23 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  const changes: PullRequestService["Service"]["changes"] = (input) =>
+    Stream.unwrap(
+      requireProject(input).pipe(
+        Effect.map((project) =>
+          project.api.changeRequestEvents === undefined
+            ? Stream.empty
+            : project.api.changeRequestEvents({
+                cwd: project.project.workspaceRoot,
+                repository: project.repository,
+                host: project.host,
+                number: input.number,
+              }),
+        ),
+        Effect.orElseSucceed(() => Stream.empty),
+      ),
+    );
+
   // Access can change after page load; recheck every write.
   const viewerPermissionsOf = (
     project: SupportedProject,
@@ -1173,10 +1212,10 @@ export const make = Effect.gen(function* () {
           const roots =
             viewerRoots.get(host) ?? forHost.map(({ project }) => project.workspaceRoot);
           const key = JSON.stringify([host, api.kind, [...new Set(roots)].sort()]);
-          if (options?.allowPaused === true) return Cache.get(viewerFlights, key);
+          if (options?.allowPaused === true) return getShared(viewerFlights, key);
           // Check pauses outside the shared lookup so background reads cannot spawn repeated failing CLIs and extend the pause.
           return rateLimits.check({ provider: api.kind, host }).pipe(
-            Effect.flatMap(() => Cache.get(viewerFlights, key)),
+            Effect.flatMap(() => getShared(viewerFlights, key)),
             Effect.catch((error) =>
               Effect.succeed<ResolvedViewer>({
                 host,
@@ -1270,7 +1309,12 @@ export const make = Effect.gen(function* () {
     const involvement = input.involvement ?? "all";
     const epochAtStart = epochCounter;
     const continuation = yield* decodeCursors(input.cursors);
-    const { supported: projects, unimplemented, viewerRoots } = yield* listWorkspaceProjects(input);
+    const {
+      supported: projects,
+      unimplemented,
+      viewerRoots,
+      refinedProjectIdsByHost,
+    } = yield* listWorkspaceProjects(input);
     const projectCounts = new Map<string, number>();
     for (const { host } of projects) {
       projectCounts.set(host, (projectCounts.get(host) ?? 0) + 1);
@@ -1292,6 +1336,7 @@ export const make = Effect.gen(function* () {
           searchesOnHost: capabilities?.search ?? false,
           actions: capabilities?.actions ?? [],
           projectCount: projectCounts.get(result.host) ?? 1,
+          projectIds: refinedProjectIdsByHost.get(result.host),
           configured: result.viewer !== null,
           detail: result.error === null ? null : providerDetail(requirementOf, result.error),
         };
@@ -1302,6 +1347,7 @@ export const make = Effect.gen(function* () {
         searchesOnHost: false,
         actions: [],
         projectCount,
+        projectIds: refinedProjectIdsByHost.get(host),
         configured: false,
         detail: "This host cannot be browsed here yet.",
       })),
@@ -1320,6 +1366,14 @@ export const make = Effect.gen(function* () {
         message: `${repository} could not be read.`,
       }));
     if (readable.length === 0) {
+      const listResult: PullRequestListResult = {
+        viewers: viewers as PullRequestListResult["viewers"],
+        providers,
+        entries: [],
+        errors: unreadable,
+        truncated: false,
+        nextCursors: {},
+      };
       const errors = viewerResults.flatMap((result) =>
         result.error === null || !selected.some(({ host }) => host === result.host)
           ? []
@@ -1327,17 +1381,13 @@ export const make = Effect.gen(function* () {
       );
       const blocking = errors.find(isProviderUnusable) ?? errors[0];
       if (blocking) {
-        return yield* toPullRequestError("list")(blocking);
+        // Preserve failure/retry semantics while letting clients try another server for these hosts.
+        const error = toPullRequestError("list")(blocking);
+        return yield* error._tag === "PullRequestUnavailableError"
+          ? new PullRequestUnavailableError({ ...error, listResult })
+          : new PullRequestOperationError({ ...error, listResult });
       }
-
-      return {
-        viewers: viewers as PullRequestListResult["viewers"],
-        providers,
-        entries: [],
-        errors: [],
-        truncated: false,
-        nextCursors: {},
-      };
+      return listResult;
     }
 
     const limit = input.limit ?? DEFAULT_REPOSITORY_LIST_LIMIT;
@@ -1901,8 +1951,14 @@ export const make = Effect.gen(function* () {
                 ? {}
                 : { reviewThreadsTruncated: activity.reviewThreadsTruncated }),
               reviewThreads: activity.reviewThreads,
+              ...(activity.overviewThreads === undefined
+                ? {}
+                : { overviewThreads: activity.overviewThreads }),
               commits: activity.commits,
               ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),
+              ...(activity.reviewRequests === undefined
+                ? {}
+                : { reviewRequests: activity.reviewRequests }),
             })),
           ),
       ),
@@ -3082,13 +3138,7 @@ export const make = Effect.gen(function* () {
         ? null
         : Object.entries(input.cursors).toSorted(([left], [right]) => left.localeCompare(right)),
     ]);
-    // A replacement reader can join a lookup still finishing its previous reader's cancellation.
-    return Cache.get(listCache, key).pipe(
-      Effect.catchCauseIf(
-        (cause) => Cause.hasInterruptsOnly(cause),
-        (_cause) => Cache.get(listCache, key),
-      ),
-    );
+    return getShared(listCache, key);
   };
 
   const checksCache = yield* Cache.makeWith(
@@ -3294,7 +3344,7 @@ export const make = Effect.gen(function* () {
   const detail: PullRequestService["Service"]["detail"] = (input) => {
     const key = refCacheKey(input);
     // Skip reads older than strict summaries; caching them would preserve regressions without asking the host again.
-    const read = Cache.get(detailCache, key).pipe(
+    const read = getShared(detailCache, key).pipe(
       Effect.tap((value) => {
         if (value.state === "merged") noteMerged(input);
         const summary = summaryFromDetail(value, lastGoodSummary.peek(key));
@@ -3364,7 +3414,7 @@ export const make = Effect.gen(function* () {
     return Cache.getSuccess(detailCache, key).pipe(
       Effect.flatMap(
         Option.match({
-          onNone: () => Cache.get(previewCache, key),
+          onNone: () => getShared(previewCache, key),
           onSome: (detail) => Effect.succeed(previewFields(detail)),
         }),
       ),
@@ -3372,7 +3422,7 @@ export const make = Effect.gen(function* () {
   };
   const activity: PullRequestService["Service"]["activity"] = (input) => {
     const key = refCacheKey(input);
-    return Cache.get(activityCache, key);
+    return getShared(activityCache, key);
   };
 
   const diffCache = yield* Cache.makeWith(
@@ -3443,7 +3493,7 @@ export const make = Effect.gen(function* () {
       ),
       Effect.uninterruptible,
     );
-    const read = Cache.get(diffCache, key).pipe(
+    const read = getShared(diffCache, key).pipe(
       Effect.ensuring(evictDiffs),
       Effect.ensuring(Effect.sync(armDiffSweep)),
     );
@@ -3468,7 +3518,7 @@ export const make = Effect.gen(function* () {
   const filesViewed: PullRequestService["Service"]["filesViewed"] = (input) =>
     canonicalRef(input).pipe(
       Effect.flatMap((ref) =>
-        Cache.get(filesViewedCache, JSON.stringify([refCacheKey(ref), filesViewedEpoch(ref)])),
+        getShared(filesViewedCache, JSON.stringify([refCacheKey(ref), filesViewedEpoch(ref)])),
       ),
     );
 
@@ -3515,12 +3565,7 @@ export const make = Effect.gen(function* () {
     }
     if (missing.size === 0) return { stats: held };
     const key = statsBatchKey(missing.values());
-    const { result, at } = yield* Cache.get(listStatsCache, key).pipe(
-      Effect.catchCauseIf(
-        (cause) => Cause.hasInterruptsOnly(cause),
-        (_cause) => Cache.get(listStatsCache, key),
-      ),
-    );
+    const { result, at } = yield* getShared(listStatsCache, key);
     for (const [key, ref] of missing) {
       const stat = result.stats.find(
         (stat) =>
@@ -3796,11 +3841,12 @@ export const make = Effect.gen(function* () {
     ),
     refreshAfterTurn,
     detail: credentialCached(detail),
-    checks: credentialCached((input) => Cache.get(checksCache, refCacheKey(input))),
+    checks: credentialCached((input) => getShared(checksCache, refCacheKey(input))),
     watchFingerprint: credentialCached((input) =>
-      Cache.get(watchFingerprintCache, refCacheKey(input)),
+      getShared(watchFingerprintCache, refCacheKey(input)),
     ),
     activity: credentialCached(activity),
+    changes,
     preview: credentialCached(preview),
     threadComments,
     diff: credentialCached(diff),

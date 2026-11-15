@@ -7,6 +7,7 @@ import type { HttpClient } from "effect/http";
 import {
   EnvironmentCloudEndpointUnavailableError,
   type EnvironmentCloudLinkStateResult,
+  type EnvironmentConnectReachability,
   EnvironmentHttpBadRequestError,
   EnvironmentHttpConflictError,
   EnvironmentHttpForbiddenError,
@@ -27,6 +28,7 @@ import { executeConnectedEnvironmentHttpRequest } from "@t3tools/client-runtime/
 import { resolveCloudPublicConfig } from "./publicConfig";
 import {
   finishRelayClientInstall,
+  onRelayClientInstallCancel,
   reportRelayClientInstallProgress,
   requestRelayClientInstallConfirmation,
 } from "./relayClientInstallDialog";
@@ -51,6 +53,19 @@ const relayClientRpcError = (message: string) => (cause: unknown) =>
     message,
     cause,
   });
+
+const waitForRelayClientInstallCancel = Effect.callback<never, CloudEnvironmentLinkError>(
+  (resume) => {
+    const unsubscribe = onRelayClientInstallCancel(() => {
+      resume(
+        Effect.fail(
+          new CloudEnvironmentLinkError({ message: "Relay client installation was cancelled." }),
+        ),
+      );
+    });
+    return Effect.sync(unsubscribe);
+  },
+);
 
 const ensureRelayClientAvailable = Effect.fn("linkEnvironment.ensureRelayClientAvailable")(
   function* (
@@ -87,6 +102,8 @@ const ensureRelayClientAvailable = Effect.fn("linkEnvironment.ensureRelayClientA
       .pipe(
         Stream.runLast,
         Effect.mapError(relayClientRpcError("Could not install the relay client.")),
+        // Cancel in the dialog interrupts the stream, and with it the server install.
+        Effect.raceFirst(waitForRelayClientInstallCancel),
         Effect.ensuring(Effect.sync(finishRelayClientInstall)),
       );
     if (Option.isNone(installed) || installed.value.type !== "complete") {
@@ -253,6 +270,24 @@ export const readCloudLinkState: (input: {
         request: ({ client, headers }) => client.linkState({ headers }),
       },
       "Could not read environment cloud link state.",
+    );
+  });
+
+/** Runs the environment's T3 Connect reachability check now; the link state then reports it. */
+export const checkCloudReachability: (input: {
+  readonly target: CloudLinkTarget;
+}) => Effect.Effect<EnvironmentConnectReachability, CloudEnvironmentLinkError, CloudLinkServices> =
+  Effect.fn("linkEnvironment.checkCloudReachability")(function* (input: {
+    readonly target: CloudLinkTarget;
+  }) {
+    return yield* connectRequest(
+      input.target,
+      {
+        method: "POST",
+        url: (urls) => urls.checkReachability(),
+        request: ({ client, headers }) => client.checkReachability({ headers }),
+      },
+      "Could not check T3 Connect.",
     );
   });
 

@@ -1,3 +1,4 @@
+import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
 import {
   boundAttachmentIds,
   buildExpiredTerminalContextToastCopy,
@@ -35,6 +36,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentThreadDetails } from "../state/threads";
 
 import type { Thread } from "../types";
+import { derivePhase } from "../session-logic";
 import { makeThreadFixture, makeThreadProjectionFixture } from "../test-fixtures";
 import {
   getAntigravitySendBlockReason,
@@ -47,9 +49,11 @@ import {
   timelineHasEphemeralPreviewUrls,
   createLocalDispatchSnapshot,
   deriveCommittedServerUserMessageIds,
+  deriveTimelineWorking,
   deriveComposerSendState,
   deriveLockedProvider,
   hasServerAcknowledgedLocalDispatch,
+  shouldShowComposerTasks,
   waitForRevertedMessage,
 } from "./ChatView.logic";
 
@@ -143,6 +147,18 @@ describe("buildExpiredTerminalContextToastCopy", () => {
   });
 });
 
+describe("shouldShowComposerTasks", () => {
+  it("hides a settled run's finished plan while the next send is pending", () => {
+    expect(
+      shouldShowComposerTasks({
+        steps: [{ status: "completed" }],
+        planRunSettled: true,
+        isSendBusy: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("hasServerAcknowledgedLocalDispatch", () => {
   it("acknowledges a settled newer background turn", () => {
     const localDispatch = createLocalDispatchSnapshot(
@@ -224,6 +240,15 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         threadError: null,
       }),
     ).toBe(acknowledged);
+
+    expect(
+      deriveTimelineWorking({
+        phase: derivePhase({ ...readySession, status }),
+        isSendBusy: !acknowledged,
+        isCompacting: false,
+        runlessWorkStartedAt: null,
+      }),
+    ).toBe(true);
   });
 
   it("waits for the matching running turn before acknowledging", () => {
@@ -1214,5 +1239,27 @@ describe("deriveAvailableRevertTurnCounts", () => {
   it("offers nothing without a provider session to rewind", () => {
     expect(deriveAvailableRevertTurnCounts(projection({ providerSessionId: null })).size).toBe(0);
     expect(deriveAvailableRevertTurnCounts(null).size).toBe(0);
+  });
+});
+
+describe("Open in for the host environment", () => {
+  it("shows both local environments when the primary has a separate WSL home", () => {
+    const primaryEnvironmentId = EnvironmentId.make("wsl");
+    const hostEnvironmentId = EnvironmentId.make("host");
+    for (const [activeThreadEnvironmentId, visible] of [
+      [primaryEnvironmentId, true],
+      [hostEnvironmentId, true],
+      [EnvironmentId.make("other"), false],
+    ] as const) {
+      expect(
+        shouldShowOpenInPicker({
+          activeProjectName: "Project",
+          activeThreadEnvironmentId,
+          primaryEnvironmentId,
+          hostEnvironmentId,
+          remoteOpenMode: "local-exec",
+        }),
+      ).toBe(visible);
+    }
   });
 });

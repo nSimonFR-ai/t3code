@@ -325,7 +325,7 @@ function LinkThreadIssueDialog({
               <Button
                 size="sm"
                 type="submit"
-                variant="outline"
+                variant="secondary"
                 disabled={
                   !canLink ||
                   pendingKey !== null ||
@@ -401,7 +401,7 @@ function LinkThreadIssueDialog({
                 <Button
                   type="submit"
                   size="sm"
-                  variant="outline"
+                  variant="secondary"
                   disabled={directRef === null || !canLink || pendingKey !== null}
                 >
                   Link key
@@ -459,7 +459,7 @@ function LinkThreadIssueDialog({
             {listFailed ? (
               <Button
                 size="sm"
-                variant="outline"
+                variant="secondary"
                 disabled={list.isPending || listPending || pendingKey !== null}
                 onClick={list.refresh}
               >
@@ -469,7 +469,7 @@ function LinkThreadIssueDialog({
           </div>
         </DialogPanel>
         <DialogFooter>
-          <Button variant="outline" size="sm" disabled={pendingKey !== null} onClick={onClose}>
+          <Button variant="secondary" size="sm" disabled={pendingKey !== null} onClick={onClose}>
             Cancel
           </Button>
         </DialogFooter>

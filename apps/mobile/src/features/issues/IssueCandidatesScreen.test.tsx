@@ -66,7 +66,7 @@ vi.mock("../../components/ui/AppText", () => ({
   AppText: ({ children }: Props) => children,
   AppTextInput: () => null,
 }));
-vi.mock("../../components/ui/AndroidScreenHeader", () => ({ AndroidScreenHeader: () => null }));
+vi.mock("../../components/ui/AppBar", () => ({ AppBar: () => null }));
 vi.mock("../../components/ui/EmptyState", () => ({ EmptyState: () => null }));
 vi.mock("../../components/ui/Button", () => ({ Button: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));

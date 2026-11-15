@@ -4,7 +4,7 @@ What this fork (`nSimonFR-ai/t3code`, branch `nicos/issues-nightly-<version>`) c
 
 Requirements use MUST / SHOULD. Each section ends with where the change lives and how it's checked, so the next rebase onto a newer nightly can carry it forward or drop it on purpose.
 
-Current base: `v0.1.8-nightly.20261109.4392` (pingdotgg/t3code `main` at `521ac7c218`) + pingdotgg/t3code#19576 at `4b44b92`.
+Current base: `v0.1.10-preview.20261111.4547` (pingdotgg/t3code `main` at `1f9675e2a1`) + pingdotgg/t3code#19576 at `4b44b92`.
 
 ## 1. Issues stack
 
@@ -18,9 +18,14 @@ The fork carries Bil0000's Issues rewrite, pingdotgg/t3code#19576 (it replaced #
 
 Where: merge commit on the branch, plus the follow-up port commit. Check: web, server, mobile and package typechecks are clean.
 
+Web integration points that upstream's layout redesign owns, and where the fork hooks in:
+- Issues is a layout page tab like Pull requests: `LayoutPageContent` kind `issues` in `layout/layoutModel.ts`, `pageNavigation.tsx`, `PageSurface.tsx`, `PaneTabs.tsx`, `NewTabLauncher.tsx` and `sidebar/SidebarChrome.tsx`. The page is `components/issue/IssuesPage.tsx`; the route file only validates search (`issuesSearch.ts`).
+- Thread `issue` surfaces render in `components/ThreadSurfaceTab.tsx` (`ChatViewIssuePanel`); a pull-request surface with an `environmentId` keeps that environment there too.
+- Issue UI reuses PR pieces. Fork-owned copies live in `components/issue/issueListChrome.tsx` (`PullRequestDetailTabBar`, `PullRequestRefreshControl`, `PullRequestMetaLine`); `state/mergedEnvironmentQuery.ts` re-exports upstream's `createMergedEnvironmentQuery`. Keep edits to upstream files to a few props (`PullRequestSearchInput`, `PullRequestListGhost`, exported `PullRequestFilterRadioGroup`).
+
 ## 2. Database migrations
 
-- R2.1 The issue migrations MUST be numbered after upstream's highest migration (81–84 at nightly 4301, after upstream's 80). On every rebase, recheck upstream's highest id and move the issue block past it.
+- R2.1 The issue migrations MUST be numbered after upstream's highest migration (82–85 at 0.1.10, after upstream's 81). On every rebase, recheck upstream's highest id and move the issue block past it.
 - R2.2 Databases written by #19576 preview builds (issue block at 63, 65 or 67) or by the 0.1.4 fork builds (issue block at 73–76) MUST be moved to the new ids. Any upstream migrations those ids shadowed MUST run (upstream's 73–77 for the 0.1.4 builds).
 - R2.3 Databases written by the earlier fork builds (ledger rows `62 ProjectionThreadIssues`, `63 WorkItemLinks`) MUST start cleanly. The server retires those two rows, drops the unused `work_item_links` table and `projection_threads.issue_links_json` column, then runs upstream's 62+ and the issue migrations.
 - R2.4 Back up `statev2.sqlite` on both hosts before deploying. New migrations can't be rolled back.
@@ -87,6 +92,8 @@ Where: `isClaudeAmbientTaskStarted` and `handleSdkMessage` in `apps/server/src/o
 
 ## Known gaps
 
+- The mobile workspace toolbar was rewritten upstream at 0.1.10 (`WorkspaceDock`, `WorkspaceSearchField` and `WorkspaceToolbar.ios` are gone), so the Issues tab entry that the earlier builds added there is not re-added; `IssuesScreen` and the issue routes still compile. The mobile app is not built by this fork's release.
+- The browser tests under `apps/web/src/components/issue` were adapted to the page/route split at 0.1.10 but not run (the gate runs typecheck and the persistence tests only).
 - Thread issue links saved in the earlier builds' format (`provider`/`repository`/`number`, without `tracker`/`scope`/`key`) make the server fail to start. The live databases were fixed by hand, but the branch has no conversion, so the pre-0.1.4 backups can't be restored as-is. SHOULD convert or drop them when projections are read.
 - A project can't link Linear issues unless some project is bound to a team of that Linear workspace (the earlier builds' fallback for projects without a git host isn't ported). Any team of a bound workspace works (R1.4).
 - Trees show only the first page of children. Trackers other than Linear show direct children only, without PRs.

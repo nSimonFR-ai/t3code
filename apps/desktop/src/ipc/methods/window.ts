@@ -125,6 +125,22 @@ export const getWindowFullscreenState = DesktopIpc.makeSyncIpcMethod({
   }),
 });
 
+// macOS traffic lights. The renderer hides them while the sidebar is collapsed
+// when the user opts in; other platforms keep their caption buttons.
+export const setWindowButtonsVisible = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SET_WINDOW_BUTTONS_VISIBLE_CHANNEL,
+  payload: Schema.Boolean,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.setWindowButtonsVisible")(function* (visible, event) {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    if (environment.platform !== "darwin" || event === undefined) return;
+    const contents = Electron.webContents.fromId(event.sender.id);
+    const window = contents ? Electron.BrowserWindow.fromWebContents(contents) : null;
+    if (!window || window.isDestroyed()) return;
+    window.setWindowButtonVisibility(visible);
+  }),
+});
+
 export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
   channel: IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL,
   result: Schema.Array(DesktopEnvironmentBootstrapSchema),
@@ -290,6 +306,16 @@ export const setTheme = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const setBlackChrome = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SET_BLACK_CHROME_CHANNEL,
+  payload: Schema.Boolean,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.setBlackChrome")(function* (enabled) {
+    const electronTheme = yield* ElectronTheme.ElectronTheme;
+    yield* electronTheme.setBlackChrome(enabled);
+  }),
+});
+
 export const showContextMenu = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CONTEXT_MENU_CHANNEL,
   payload: ContextMenuInput,
@@ -448,6 +474,56 @@ export const revealWindow = DesktopIpc.makeIpcMethod({
       return;
     }
     yield* electronWindow.reveal(window.value);
+  }),
+});
+
+const htmlFullscreenStates = new WeakMap<
+  Electron.BrowserWindow,
+  { owned: boolean; leaving: boolean }
+>();
+
+const htmlFullscreenState = (window: Electron.BrowserWindow) => {
+  const existing = htmlFullscreenStates.get(window);
+  if (existing !== undefined) return existing;
+  const state = { owned: false, leaving: false };
+  window.on("leave-full-screen", () => {
+    // Leaving OS fullscreen any other way, such as F11, hands the window back to the user.
+    if (!state.leaving) state.owned = false;
+    state.leaving = false;
+  });
+  htmlFullscreenStates.set(window, state);
+  return state;
+};
+
+// The main window keeps HTML fullscreen inside itself so preview guests stay in their webview,
+// so the app's own fullscreen elements, such as chat videos, take the screen here.
+export const syncHtmlFullscreen = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SYNC_HTML_FULLSCREEN_CHANNEL,
+  payload: Schema.Boolean,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.syncHtmlFullscreen")(function* (fullscreen, event) {
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const main = yield* electronWindow.main;
+    if (
+      event === undefined ||
+      Option.isNone(main) ||
+      main.value.isDestroyed() ||
+      main.value.webContents.id !== event.sender.id
+    ) {
+      return;
+    }
+    const window = main.value;
+    const state = htmlFullscreenState(window);
+    if (fullscreen) {
+      // macOS reports fullscreen until its exit animation ends, and Electron queues the re-entry.
+      if (state.owned || (window.isFullScreen() && !state.leaving)) return;
+      state.owned = true;
+      window.setFullScreen(true);
+    } else if (state.owned) {
+      state.owned = false;
+      state.leaving = window.isFullScreen();
+      window.setFullScreen(false);
+    }
   }),
 });
 

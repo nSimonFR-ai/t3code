@@ -103,7 +103,7 @@ export function DatabaseStorageNotice({
             control={
               <div className="flex flex-wrap items-center gap-1.5">
                 <Button
-                  variant="outline"
+                  variant="secondary"
                   size="xs"
                   onClick={() => copyToClipboard(status.compactCommand, undefined)}
                 >
@@ -163,13 +163,13 @@ function ReclaimRow({
       title={`${amount} on ${label}`}
       description={
         status.reclaimFailure === undefined
-          ? `Restarts T3 Code there. It is offline for about ${minutes} min.`
+          ? `Restarts T3 Code there. It will be offline for about ${minutes} min.`
           : `The last attempt failed: ${status.reclaimFailure}`
       }
       control={
         <div className="flex flex-wrap items-center gap-1.5">
           <Button
-            variant="outline"
+            variant="secondary"
             size="xs"
             disabled={restarting}
             onClick={() => setConfirming(true)}
@@ -184,12 +184,12 @@ function ReclaimRow({
                   Reclaim {amount} on {label}?
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  T3 Code on {label} stops, rebuilds its database, and starts again. It is offline
-                  for about {minutes} min. Running agents stop when it restarts.
+                  T3 Code on {label} stops, rebuilds its database, and starts again. It will be
+                  offline for about {minutes} min. Running agents stop when it restarts.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+                <AlertDialogClose render={<Button variant="secondary" />}>Cancel</AlertDialogClose>
                 <Button onClick={() => void start()}>Restart and reclaim</Button>
               </AlertDialogFooter>
             </AlertDialogPopup>

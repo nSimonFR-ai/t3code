@@ -9,10 +9,10 @@ import { migrationManifest, runMigrations } from "./Migrations.ts";
 import PullRequestFilesViewed from "./Migrations/053_PullRequestFilesViewed.ts";
 import RemoveRedundantProjectionIndexes from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
-import IssueTrackerBindings from "./Migrations/081_IssueTrackerBindings.ts";
-import IssueTrackerBindingHost from "./Migrations/082_IssueTrackerBindingHost.ts";
-import IssueTrackerAccounts from "./Migrations/083_IssueTrackerAccounts.ts";
-import IssueAccountStorage from "./Migrations/084_IssueAccountStorage.ts";
+import IssueTrackerBindings from "./Migrations/082_IssueTrackerBindings.ts";
+import IssueTrackerBindingHost from "./Migrations/083_IssueTrackerBindingHost.ts";
+import IssueTrackerAccounts from "./Migrations/084_IssueTrackerAccounts.ts";
+import IssueAccountStorage from "./Migrations/085_IssueAccountStorage.ts";
 
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -53,7 +53,7 @@ const seedIssuePreview = Effect.fnUntraced(function* (throughId: number, startId
 
 describe("Issues preview upgrade", () => {
   it.effect.each(
-    [63, 65, 73, 78].flatMap((startId) =>
+    [63, 65, 73, 78, 81].flatMap((startId) =>
       [0, 1, 2, 3].map((offset) => ({ startId, throughId: startId + offset })),
     ),
   )(
@@ -138,9 +138,13 @@ describe("Issues preview upgrade", () => {
           VALUES ('thread', 'project', 'Thread', 'codex', 'full-access', 'default',
             '2026-10-15T00:00:00Z', '2026-10-15T00:00:00Z', ${payload})`;
 
+        // The migrator runs only the upstream ids the preview's issue block had shadowed.
+        const firstIssueId = migrationManifest.find(([, name]) => name === "IssueTrackerBindings")![0];
         assert.deepStrictEqual(
           yield* runMigrations({ toMigrationInclusive: startId + 1 }),
-          migrationManifest.filter(([id]) => id === startId || id === startId + 1),
+          migrationManifest.filter(
+            ([id]) => id >= startId && id <= Math.min(startId + 1, firstIssueId - 1),
+          ),
         );
         yield* runMigrations();
         assert.deepStrictEqual(yield* runMigrations(), []);
@@ -151,13 +155,13 @@ describe("Issues preview upgrade", () => {
           migrationManifest,
         );
         const shiftedHistory = yield* sql`SELECT migration_id, name, created_at
-          FROM effect_sql_migrations WHERE migration_id BETWEEN 81 AND ${throughId + 81 - startId}
+          FROM effect_sql_migrations WHERE migration_id BETWEEN 82 AND ${throughId + 82 - startId}
           ORDER BY migration_id`;
         assert.deepStrictEqual(
           shiftedHistory,
           oldHistory.map((row) => ({
             ...row,
-            migration_id: row.migration_id + 81 - startId,
+            migration_id: row.migration_id + 82 - startId,
           })),
         );
         const bindings = yield* sql`SELECT * FROM issue_tracker_bindings`;
@@ -358,10 +362,11 @@ describe("V2 preview upgrade", () => {
         [78, "DropOrchestrationEventCorrelationIndex"],
         [79, "DelegatedRecoveryIndexes"],
         [80, "ScheduledTaskThreadMode"],
-        [81, "IssueTrackerBindings"],
-        [82, "IssueTrackerBindingHost"],
-        [83, "IssueTrackerAccounts"],
-        [84, "IssueAccountStorage"],
+        [81, "ProjectionMessageSearchText"],
+        [82, "IssueTrackerBindings"],
+        [83, "IssueTrackerBindingHost"],
+        [84, "IssueTrackerAccounts"],
+        [85, "IssueAccountStorage"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -465,10 +470,11 @@ describe("V2 preview upgrade", () => {
         [78, "DropOrchestrationEventCorrelationIndex"],
         [79, "DelegatedRecoveryIndexes"],
         [80, "ScheduledTaskThreadMode"],
-        [81, "IssueTrackerBindings"],
-        [82, "IssueTrackerBindingHost"],
-        [83, "IssueTrackerAccounts"],
-        [84, "IssueAccountStorage"],
+        [81, "ProjectionMessageSearchText"],
+        [82, "IssueTrackerBindings"],
+        [83, "IssueTrackerBindingHost"],
+        [84, "IssueTrackerAccounts"],
+        [85, "IssueAccountStorage"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

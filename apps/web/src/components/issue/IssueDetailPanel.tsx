@@ -70,17 +70,14 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import {
-  PullRequestDetailTitleRow,
-  PullRequestDetailTabBar,
-} from "../pullRequest/PullRequestDetailLayout";
+import { PullRequestDetailTitleRow } from "../pullRequest/PullRequestDetailLayout";
+import { PullRequestDetailTabBar, PullRequestMetaLine } from "./issueListChrome";
 import { PullRequestEditButton } from "../pullRequest/PullRequestEditButton";
 import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
 import { PullRequestMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
 import {
   PullRequestActorLabel,
   PullRequestLabelChip,
-  PullRequestMetaLine,
   PullRequestStateGlyph,
 } from "../pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
@@ -278,7 +275,7 @@ export function IssueReactionBar({
             render={
               <Button
                 size="xs"
-                variant={reaction.viewerHasReacted ? "secondary" : "outline"}
+                variant={reaction.viewerHasReacted ? "secondary" : "secondary"}
                 aria-pressed={reaction.viewerHasReacted}
                 aria-label={`${pullRequestReactionName(reaction.content)}, ${reaction.count}`}
                 disabled={
@@ -297,7 +294,7 @@ export function IssueReactionBar({
       {canReact && offered.length > 0 ? (
         <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
           <PopoverTrigger
-            render={<Button size="icon-xs" variant="outline" aria-label="Add a reaction" />}
+            render={<Button size="icon-xs" variant="secondary" aria-label="Add a reaction" />}
           >
             <SmilePlusIcon aria-hidden className="size-3.5" />
           </PopoverTrigger>
@@ -738,7 +735,7 @@ function IssueDetailContent({
       {!needsStateCandidates && openingStates.length === 1 && closingStates.length === 0 ? (
         <Button
           size="xs"
-          variant="outline"
+          variant="secondary"
           disabled={changingState || submitting === "close"}
           onClick={() => void moveTo(openingStates[0]!)}
         >
@@ -751,7 +748,7 @@ function IssueDetailContent({
       openingStates.length === 0 ? (
         <Button
           size="xs"
-          variant="outline"
+          variant="secondary"
           disabled={changingState || submitting === "close"}
           onClick={() => void moveTo(closingStates[0]!)}
         >
@@ -766,7 +763,7 @@ function IssueDetailContent({
             render={
               <Button
                 size="xs"
-                variant="outline"
+                variant="secondary"
                 disabled={changingState || submitting === "close"}
               />
             }
@@ -887,7 +884,7 @@ function IssueDetailContent({
             {project && canOperate ? (
               <Button
                 size="xs"
-                variant="outline"
+                variant="secondary"
                 disabled={handoff.pending}
                 onClick={() => void handoff.start(detail)}
               >
@@ -972,7 +969,7 @@ function IssueDetailContent({
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
+                variant="secondary"
                 disabled={saving}
                 onClick={() => setEditing(null)}
               >

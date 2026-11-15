@@ -68,7 +68,7 @@ export function IssueFiltersMenu({
   ].filter(Boolean).length;
   return (
     <Menu>
-      <MenuTrigger render={<Button variant="outline" aria-label="Filters" />}>
+      <MenuTrigger render={<Button variant="secondary" aria-label="Filters" />}>
         <ListFilterIcon aria-hidden className="size-4" />
         Filters
         {count > 0 ? (

@@ -49,6 +49,7 @@ import {
 } from "~/versionSkew";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { isElectron } from "~/env";
+import { useT3ConnectTurnOn } from "~/cloud/useT3ConnectTurnOn";
 import { useCloudLinkController } from "~/cloud/useCloudLinkController";
 import { useManagedTunnelUsage } from "~/cloud/managedRelayState";
 import { useT3ConnectAccountPage } from "../clerk/T3ConnectAccountPages";
@@ -209,14 +210,11 @@ export function SavedBackendListRow({
       (lastDescriptor === undefined ? null : { environment: lastDescriptor }),
   );
   const routeCount = connectionRoutes(environment.entry).length;
-  const subtitleText = [
-    environmentTransportLabel(environment, connectedTarget),
-    // The headline below names the failure in full.
-    diagnosis ? null : resumingServerUpdate ? "Restarting" : status.text,
-    enabled && versionMismatch ? serverVersion : null,
-  ]
-    .filter((value): value is string => value !== null)
-    .join(" · ");
+  const subtitleText = diagnosis
+    ? environmentTransportLabel(environment, connectedTarget)
+    : resumingServerUpdate
+      ? "Restarting"
+      : status.text;
 
   const showUpdateAction =
     enabled &&
@@ -224,7 +222,8 @@ export function SavedBackendListRow({
     versionMismatch !== null &&
     (serverUpdateState.status === "idle" || serverUpdateState.status === "failed");
 
-  const statusTooltip = `${
+  const statusTooltip = `${environmentTransportLabel(environment, connectedTarget)}
+${serverVersion ? `Version ${serverVersion}\n` : ""}${
     unsupported
       ? (environment.connection.error ?? connectionStatusText(environment.connection))
       : enabled
@@ -242,7 +241,7 @@ export function SavedBackendListRow({
       label={environment.label}
       dimmed={!enabled}
       subtitle={
-        <span className="flex min-w-0 items-center gap-1">
+        <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           <Tooltip>
             {/* The status can change while the tooltip is open, and base-ui only
                 re-measures the popup when the trigger's payload changes. */}
@@ -267,14 +266,10 @@ export function SavedBackendListRow({
               {statusTooltip}
             </TooltipPopup>
           </Tooltip>
-          <span aria-hidden className="shrink-0">
-            ·
-          </span>
-          <button
-            type="button"
+          <InlineButton
+            tone="muted"
             aria-expanded={routesOpen}
             onClick={() => setRoutesOpen((open) => !open)}
-            className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           >
             {routeCount === 1 ? "Routes" : `${routeCount} routes`}
             <ChevronRightIcon
@@ -284,16 +279,12 @@ export function SavedBackendListRow({
                 routesOpen && "rotate-90",
               )}
             />
-          </button>
-          <span aria-hidden className="shrink-0">
-            ·
-          </span>
-          <button
-            type="button"
+          </InlineButton>
+          <InlineButton
+            tone="muted"
             aria-expanded={permissionsOpen}
             aria-controls={`remote-permissions-${environmentId}`}
             onClick={() => setPermissionsOpen((open) => !open)}
-            className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           >
             Permissions
             <ChevronRightIcon
@@ -303,7 +294,7 @@ export function SavedBackendListRow({
                 permissionsOpen && "rotate-90",
               )}
             />
-          </button>
+          </InlineButton>
         </span>
       }
       below={
@@ -487,9 +478,13 @@ function T3ConnectTunnelUsage({ tunnelLimit }: { readonly tunnelLimit: number | 
         used={usage.used}
         limit={usage.limit}
         action={
-          // At the cap the alert below carries the same action.
-          usage.upgrade && openAccountPage && !showLimitAlert ? (
+          // At the cap the alert below carries the same actions.
+          !openAccountPage || showLimitAlert ? null : usage.upgrade ? (
             <InlineButton onClick={() => openAccountPage("t3-chat")}>Get more tunnels</InlineButton>
+          ) : usage.used >= usage.limit ? (
+            <InlineButton onClick={() => openAccountPage("t3-connect")}>
+              Manage tunnels
+            </InlineButton>
           ) : null
         }
       />
@@ -536,6 +531,9 @@ function ConfiguredCloudLinkRow({
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
   // The server unlinks and refuses relay changes under such a policy; unlinking stays possible.
   const connectDenial = managedCapabilityDenial(useManagedPolicy(environmentId), "connect");
+  const turnOn = useT3ConnectTurnOn(environmentId);
+  // Turning on links from this desktop's own backend only; turning off works from anywhere.
+  const showSwitch = isElectron && (turnOn.kind !== "on-host" || managedTunnelActive);
   const [isUpdating, setIsUpdating] = useState(false);
   const [isUpdatingPreference, setIsUpdatingPreference] = useState(false);
 
@@ -554,7 +552,7 @@ function ConfiguredCloudLinkRow({
   // a fresh sign-in offers both linking and publishing.
   const signedOut = isSignedIn === false;
   const signInButton = (
-    <Button size="sm" variant="outline" onClick={openAuthPrompt}>
+    <Button size="sm" variant="secondary" onClick={openAuthPrompt}>
       Sign in
     </Button>
   );
@@ -571,18 +569,22 @@ function ConfiguredCloudLinkRow({
     reachability?.status === "reachable" ? (
       formatConnectReachable(reachability)
     ) : reachability?.status === "unreachable" ? (
-      <span className="block text-destructive">
+      <span className="block text-destructive-foreground">
         {[reachability.reason, reachability.hint, `Fix: ${reachability.fix}`]
           .filter(Boolean)
           .join(" ")}{" "}
-        <a
-          href={connectReachabilityHelpUrl(reachability.cause)}
-          target="_blank"
-          rel="noreferrer"
-          className="underline underline-offset-2"
+        <InlineButton
+          tone="destructive"
+          render={
+            <a
+              href={connectReachabilityHelpUrl(reachability.cause)}
+              target="_blank"
+              rel="noreferrer"
+            />
+          }
         >
           More info
-        </a>
+        </InlineButton>
       </span>
     ) : null;
 
@@ -645,7 +647,7 @@ function ConfiguredCloudLinkRow({
 
   return (
     <>
-      {isElectron ? (
+      {showSwitch ? (
         <SettingsRow
           title={searchableSetting("t3-connect").title}
           description={
@@ -689,8 +691,13 @@ function ConfiguredCloudLinkRow({
           title={searchableSetting("t3-connect").title}
           description="This environment was removed from T3 Connect. Run `t3 connect link` on the host to link it again."
         />
+      ) : isElectron ? (
+        <SettingsRow
+          title={searchableSetting("t3-connect").title}
+          description="Run `t3 connect link` on the host, then restart T3 Code there."
+        />
       ) : null}
-      {signedOut && isElectron ? null : (
+      {signedOut && showSwitch ? null : (
         <SettingsRow
           title={searchableSetting("publish-agent-activity").title}
           description={
@@ -757,7 +764,7 @@ export function CloudLinkRow({
 
 function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnabled?: boolean }) {
   return (
-    <Empty className="min-h-52">
+    <Empty size="compact">
       <EmptyMedia variant="icon">
         <ChevronsLeftRightEllipsisIcon />
       </EmptyMedia>

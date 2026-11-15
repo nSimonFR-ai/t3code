@@ -319,7 +319,7 @@ describe("settings mutation authorization", () => {
           },
         },
       });
-      expect(handled).toBe(2);
+      expect(handled).toBe(3);
       expect(
         yield* client[WS_METHODS.serverUpdateSettings]({
           patch: { defaultRuntimeMode: "full-access" },
@@ -332,7 +332,7 @@ describe("settings mutation authorization", () => {
           patch: { secretProviders: { [SecretProviderId.make("personal")]: null } },
         }).pipe(Effect.flip),
       ).toMatchObject({ requiredPermission: AuthSettingsWriteScope });
-      expect(handled).toBe(2);
+      expect(handled).toBe(3);
     }).pipe(Effect.scoped),
   );
 
@@ -498,10 +498,14 @@ it.effect("separates host file URLs from readable attachment URLs", () =>
         url: "https://uploads.linear.app/workspace/file/image.png",
       },
     });
+    yield* client[WS_METHODS.assetsCreateUrl]({
+      resource: { _tag: "native-app-icon", app: { _tag: "app-id", appId: "com.apple.calculator" } },
+    });
     for (const resource of [
       { _tag: "workspace-file", threadId: ThreadId.make("thread"), path: "file.txt" },
       { _tag: "media-file", threadId: ThreadId.make("thread"), path: "/repo/image.png" },
       { _tag: "draft-workspace-file", cwd: "/repo", path: "file.txt" },
+      { _tag: "native-app-icon", app: { _tag: "app-path", path: "/private/Secret.app" } },
     ] as const) {
       expect(
         yield* client[WS_METHODS.assetsCreateUrl]({ resource }).pipe(Effect.flip),
@@ -510,7 +514,7 @@ it.effect("separates host file URLs from readable attachment URLs", () =>
         requiredPermission: AuthFilesystemReadScope,
       });
     }
-    expect(handled).toBe(2);
+    expect(handled).toBe(3);
   }).pipe(Effect.scoped),
 );
 

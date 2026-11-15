@@ -16,7 +16,7 @@ import {
   AssetWorkspaceRootNormalizationError,
   SOURCE_CONTROL_MEDIA_ASSET,
   ThreadId,
-  ToolActivityNativeAppReference,
+  NativeAppIconReference,
   TurnItemId,
   IssueRef,
 } from "@t3tools/contracts";
@@ -162,7 +162,7 @@ const AssetClaimsSchema = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("native-app-icon"),
-    app: ToolActivityNativeAppReference,
+    app: NativeAppIconReference,
     expiresAt: Schema.Number,
   }),
   Schema.Struct({

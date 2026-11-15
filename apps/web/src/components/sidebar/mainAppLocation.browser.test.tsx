@@ -58,7 +58,7 @@ describe("main app return location", () => {
     using _tracking = { [Symbol.dispose]: startMainAppLocationTracking(router) };
 
     const returnLocation = async (from: string, control: string) => {
-      await settled(router, router.navigate(assistantCitationNavigation(citation)));
+      await settled(router, router.navigate(assistantCitationNavigation(citation, null)));
       expect(assistantCitationFromLocation(router.state.location.href)).toEqual(citation);
       await settled(router, router.navigate({ href: from }));
       await userEvent.click(screen.getByRole("button", { name: control }));
@@ -67,7 +67,7 @@ describe("main app return location", () => {
     };
 
     const closingUsage = await returnLocation("/usage", "Close modal");
-    const sidebarBack = await returnLocation("/pull-requests", "Back to app");
+    const sidebarBack = await returnLocation("/projects/project-one", "Back to app");
 
     expect({ closingUsage, sidebarBack }).toEqual({
       closingUsage: THREAD_PATH,

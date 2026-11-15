@@ -85,8 +85,16 @@ start of the composer to edit the most recently queued message. Change
 
 Mobile has the same choice under **Settings → Chat**. While a turn is
 running the send button shows which action it will take. Long-press it to use the
-other action for a single message, or hold `Cmd` while sending from a hardware
-keyboard. The button only offers Steer when the running agent supports it.
+other action for a single message. From a hardware keyboard, `Cmd+Return`
+(`Ctrl+Return` on Android) uses the other action, or `Cmd+Shift+Return`
+(`Ctrl+Shift+Return`) when Return inserts a new line. The button only offers
+Steer when the running agent supports it.
+
+## Retry a failed run
+
+On web and desktop, when a run fails its error appears above the composer. Choose
+**Retry** to send the same message again, with its attachments, using the model
+selected in the composer.
 
 ## Queue messages offline on mobile
 
@@ -127,14 +135,14 @@ Leaving reasoning level or service tier unset uses the provider's own configurat
 ## Quote an assistant response
 
 On web and desktop, select text within one assistant response and choose
-**Cite in composer**. You can add a comment about the quote and write instructions
-around it.
+**Cite in composer**, or press `Mod+Shift+L`. You can add a comment about the quote and write
+instructions around it.
 
 Select the quote in a draft or sent message to return to its source. If the source
 is unavailable or has changed, the saved quote remains readable.
 
-The chip shows your comment when it has one, or a short quote preview otherwise. Use the pencil
-button to add or change the comment. To remove the citation, place the caret beside its chip and
+The chip shows your comment when it has one, or a short quote preview otherwise. Use the comment
+button to add or change the comment; press `Esc` to close it. To remove the citation, place the caret beside its chip and
 delete it like other inline context. Copying, reloading, and restoring a
 [stashed prompt](#prompt-stash) keep each comment
 with its quote, and sending tells the agent which words were quoted and which comment you wrote.
@@ -155,6 +163,16 @@ When the composer has text, the arrow keys move the caret as usual. Recall takes
 the text is an unedited recalled prompt, with the caret on the first visual line for `ArrowUp` or
 the last visual line for `ArrowDown`, counting wrapped lines. Editing a recalled prompt turns it
 into a normal draft.
+
+## Suggested next prompt
+
+Turn on **Suggest next prompt** in Settings > Labs. After a Claude or Codex turn completes, the
+empty composer shows a predicted next message. Press `Tab` to fill it in, then edit or send it, or
+press `Escape` to dismiss it. Each suggestion is one extra request that reuses the turn's prompt
+cache, so it uses a little of your plan's usage. Claude skips suggestions on the first turn of a
+thread and near usage limits. Codex needs version 0.165 or later; if T3 Code manages
+Codex, update it in Settings > Providers. Codex follows a change to the setting at once; open Claude
+threads follow it after they restart. Suggestions show on web and desktop.
 
 ## Edit an earlier prompt
 
@@ -178,7 +196,7 @@ memory. The action is available only when the provider supports rewind.
 On web and desktop, press `Cmd+S` on macOS or `Ctrl+S` on Windows and Linux to save
 the current prompt and its attachments for later. Wait for uploads to finish first.
 With an empty composer, the same shortcut restores a single stash or opens the
-stash menu when there are several.
+stash menu when there are several. The **Stash** chip under the composer opens the menu too.
 
 Stashes containing uploaded files must be restored in their original environment.
 Those files are retained for 24 hours. After an upload expires, restore the prompt
@@ -292,15 +310,15 @@ Claude instances can also compact idle threads for you. See
 
 ## Goals
 
-With Codex and Claude, send `/goal` followed by what "done" means, for example
+With Codex, Claude, and OpenCode 2.2.5 or later, send `/goal` followed by what "done" means, for example
 `/goal all tests in packages/api pass`. The agent keeps working across turns
 until it judges the goal met. The thread shows **Goal** while it works, and a
 line at the end of the thread (above the composer on mobile) shows the goal and
 its progress.
 
 - `/goal` alone shows the current goal. `/goal clear` removes it.
-- Codex also supports `/goal pause` and `/goal resume`. Stopping a Codex goal
-  pauses it, and so does Codex ending its work without meeting the goal.
+- Codex and OpenCode also support `/goal pause` and `/goal resume`. Stopping
+  their goal pauses it. Codex also pauses when its work ends without meeting the goal.
 - Stopping Claude ends the current turn, but the goal stays set. Claude checks it
   again at the end of your next message.
 - Sending a new goal, or `/goal resume`, while the agent works stops the current
@@ -328,10 +346,11 @@ the repository by text. Choose a result to insert it as a chip.
 
 Another thread can be context too. Type `@` followed by part of its title to pick one from
 the same server, or from a machine it links to while the Linked environments beta is on; those
-show the machine's name. On web and desktop you can also drag a thread out of the sidebar and
-drop it on the composer; a multi-selection drops together. On any client, **Copy thread** copies a
-link to the thread that pastes into a composer as its chip. The chip shows the thread's
-current title and opens it when selected. Your prompt only carries a reference: the agent reads the thread's
+show the machine's name. On web and desktop, type `#` to list recent threads below pull requests.
+You can also drag a thread out of the sidebar and drop it on the composer; a multi-selection drops
+together. On any client, **Copy thread** copies a link to the thread that pastes into a composer
+as its chip. The chip shows the thread's current title and opens it when selected. Your prompt only
+carries a reference: the agent reads the thread's
 history on demand, so attaching a long thread costs nothing until the agent looks. Attaching a
 thread does not change it, and the agent cannot send messages to it unless you ask.
 
@@ -342,6 +361,10 @@ environment must be connected and up to date. The transcript includes the visibl
 saved text context at the time of the drop; later messages and the contents of attached files
 are not copied. The agent can read the saved transcript after the source disconnects. Normal
 file attachment limits apply.
+
+Type `@` and part of a model or provider name, such as `@opus`, to name that model for the
+agent, for example when delegating. It does not change the thread's model. Join words with
+`:`, `/` or `-`, as in `@opus:opencode`.
 
 Images keep their thumbnail shelf above the text and also get a chip at your cursor, so you can
 say exactly which image you mean. Deleting an image chip leaves the image on the shelf; removing

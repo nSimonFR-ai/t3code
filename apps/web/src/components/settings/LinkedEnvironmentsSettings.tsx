@@ -1,5 +1,6 @@
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useAtomValue } from "@effect/atom-react";
-import { linkRequestFailureMessage } from "@t3tools/client-runtime/link-request";
+import { ANOTHER_ADDRESS, linkRequestFailureMessage } from "@t3tools/client-runtime/link-request";
 import {
   AuthAccessWriteScope,
   type AuthMcpClientAccess,
@@ -24,7 +25,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { accessConfig } from "../auth/ConnectAgentSurface";
-import { ConnectionStatusDot } from "../ConnectionStatusDot";
+import { StatusDot } from "../ui/status-dot";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -41,7 +42,7 @@ import { Input } from "../ui/input";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import { LinkAccessPicker } from "./LinkAccessPicker";
-import { ANOTHER_ADDRESS, LinkMachineSelect } from "./LinkMachineSelect";
+import { LinkAddressWarning, LinkMachineSelect } from "./LinkMachineSelect";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { searchableSetting } from "./settingsSearch";
@@ -64,7 +65,12 @@ export function LinkedEnvironmentsSettings({
   return (
     <SettingsSection
       {...(isSearchTarget ? { id: search.id } : {})}
-      title={environmentLabel === null ? search.title : `${search.title} · ${environmentLabel}`}
+      title={search.title}
+      titleAction={
+        environmentLabel === null ? null : (
+          <span className="text-meta text-muted-foreground">{environmentLabel}</span>
+        )
+      }
       headerAction={canLink ? <LinkEnvironmentAction environmentId={environmentId} /> : null}
     >
       {links.error ? (
@@ -103,7 +109,7 @@ function LinkedEnvironmentRow({
   const [busy, setBusy] = useState(false);
   const forget = async () => {
     const confirmed = await (requestConfirmDialog(
-      `Forget ${link.label}? Agents here stop working there. Revoke "T3 Code · …" in ${link.label}'s Connections to end the session there too.`,
+      `Forget ${link.label}? Agents here stop working there. Revoke the T3 Code connection in ${link.label}'s Connections to end the session there too.`,
       { variant: "destructive" },
     ) ?? Promise.resolve(false));
     if (!confirmed) return;
@@ -129,25 +135,28 @@ function LinkedEnvironmentRow({
       <div className={ITEM_ROW_INNER_CLASSNAME}>
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-h-5 items-center gap-1.5">
-            <ConnectionStatusDot
-              tooltipText={status}
-              dotClassName={
+            <StatusDot
+              label={status}
+              size="md"
+              tone={
                 health.kind === "reachable"
                   ? health.expiresInDays === null
-                    ? "bg-success"
-                    : "bg-warning"
+                    ? "success"
+                    : "warning"
                   : health.kind === "expired" || health.kind === "failing"
-                    ? "bg-destructive"
-                    : "bg-muted-foreground/30"
+                    ? "danger"
+                    : "neutral"
               }
-              pingClassName={null}
             />
-            <h3 className="text-sm font-medium text-foreground">{link.label}</h3>
+            <h3 className="text-label text-foreground">{link.label}</h3>
           </div>
-          <p className="text-xs text-muted-foreground">
-            {accessConfig[link.access].label} · {status}
-          </p>
-          <p className="truncate text-xs text-muted-foreground/80">{link.urls.join(", ")}</p>
+          <Tooltip>
+            <TooltipTrigger render={<p tabIndex={0} className="text-meta text-muted-foreground" />}>
+              {status}
+            </TooltipTrigger>
+            <TooltipPopup side="top">{accessConfig[link.access].label}</TooltipPopup>
+          </Tooltip>
+          <p className="truncate text-meta text-muted-foreground/80">{link.urls.join(", ")}</p>
         </div>
         {canUnlink ? (
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
@@ -183,14 +192,20 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
   const link = useAtomCommand(peerLinkEnvironment.link, { label: "link environment" });
   const selected = choice ?? (machines.length === 0 ? ANOTHER_ADDRESS : null);
   const machine = machines.find((candidate) => candidate.environmentId === selected) ?? null;
-  // This client can mint a code there when it is connected to that
-  // environment with a session that may create pairing links.
   const targetId = machine?.environmentId ?? null;
   const connected = usePreparedConnection(targetId);
   const mayMint = useEnvironmentScope(targetId, AuthAccessWriteScope);
+  // A picked machine that left the list has no address here either.
+  const needsAddress = selected !== null && (machine === null || machine.urls.length === 0);
+  // This client mints a code there when it is connected with a session that may
+  // create pairing links, and only for its own addresses: anything can answer
+  // as that machine at one typed in, so that one gets a code the user fetched.
   const canMint =
-    targetId !== null && Option.isSome(connected) && mayMint && !mintFailed.has(targetId);
-  const needsAddress = selected === ANOTHER_ADDRESS || machine?.urls.length === 0;
+    targetId !== null &&
+    !needsAddress &&
+    Option.isSome(connected) &&
+    mayMint &&
+    !mintFailed.has(targetId);
   const ready =
     selected !== null &&
     (!needsAddress || address.trim().length > 0) &&
@@ -229,7 +244,8 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
             input: {
               url,
               ...(alternateUrls.length > 0 ? { alternateUrls } : {}),
-              ...(machine === null
+              // A typed address links alone: only this app's own addresses name a machine.
+              ...(machine === null || needsAddress
                 ? {}
                 : { expectedEnvironmentId: machine.environmentId, expectedLabel: machine.label }),
               pairingCode: code,
@@ -289,13 +305,13 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
               />
             ) : null}
             {machine?.linked ? (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-meta text-muted-foreground">
                 Already linked. Linking again renews it with the access you pick.
               </p>
             ) : null}
             {needsAddress ? (
               <label className="block space-y-1.5">
-                <span className="block text-xs font-medium text-foreground">Address</span>
+                <span className="block text-caption text-foreground">Address</span>
                 <Input
                   value={address}
                   onChange={(event) => {
@@ -310,16 +326,17 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
                   spellCheck={false}
                 />
                 {machine !== null ? (
-                  <span className="block text-xs text-muted-foreground">
+                  <span className="block text-meta text-muted-foreground">
                     This app has no address for {machine.label} that another machine can reach.
                     Enter its https or Tailscale address.
                   </span>
                 ) : null}
               </label>
             ) : null}
+            {needsAddress && address.trim() ? <LinkAddressWarning address={address} /> : null}
             {selected === null || canMint ? null : (
               <label className="block space-y-1.5">
-                <span className="block text-xs font-medium text-foreground">Pairing code</span>
+                <span className="block text-caption text-foreground">Pairing code</span>
                 <Input
                   value={pairingCode}
                   onChange={(event) => setPairingCode(event.target.value)}
@@ -334,7 +351,7 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
                   spellCheck={false}
                 />
                 {machine !== null ? (
-                  <span className="block text-xs text-muted-foreground">
+                  <span className="block text-meta text-muted-foreground">
                     Create a link on {machine.label}: Settings → Connections → Create link, then
                     paste its code here.
                   </span>
@@ -345,7 +362,7 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
           </form>
         </DialogPanel>
         <DialogFooter variant="bare">
-          <DialogClose disabled={busy} render={<Button variant="outline" type="button" />}>
+          <DialogClose disabled={busy} render={<Button variant="secondary" type="button" />}>
             Cancel
           </DialogClose>
           <Button form={formId} type="submit" disabled={busy || !ready}>

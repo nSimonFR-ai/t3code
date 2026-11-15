@@ -13,6 +13,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as PlatformError from "effect/PlatformError";
@@ -23,6 +24,7 @@ import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
 import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 
 import {
@@ -1802,6 +1804,45 @@ describe("rejected git refs", () => {
 });
 
 it.layer(layerTest)("GitVcsDriver core integration", (it) => {
+  // regression: #26577 a timed-out git that outlives its timeout holds a process permit
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "kills a timed-out git command that ignores SIGTERM",
+    () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const markerPath = pathService.join(yield* makeTmpDir(), "outlived-timeout");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const trapped = yield* Deferred.make<void>();
+
+        const command = yield* driver
+          .execute({
+            operation: "GitVcsDriver.test.ignoresSigterm",
+            cwd,
+            args: [
+              "-c",
+              `alias.hang=!trap '' TERM; echo trapped; sleep 3; touch '${markerPath}'`,
+              "hang",
+            ],
+            progress: {
+              onStdoutLine: (line) =>
+                line === "trapped" ? Deferred.succeed(trapped, undefined) : Effect.void,
+            },
+          })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(trapped);
+        // The driver's timeout ends a command the same way: by interrupting it.
+        yield* Fiber.interrupt(command);
+
+        assert.isFalse(
+          yield* fileSystem.exists(markerPath),
+          "the timed-out git command kept running until it finished on its own",
+        );
+      }),
+  );
+
   it.effect("keeps large change sets available for status and commit preparation", () =>
     Effect.gen(function* () {
       const cwd = yield* makeTmpDir();
@@ -3866,6 +3907,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           path: "HEAD",
           insertions: 1,
           deletions: 0,
+          status: "modified",
         });
       }),
     );
@@ -3886,9 +3928,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const status = yield* driver.statusDetails(cwd);
 
         assert.deepEqual(status.workingTree.files, [
-          { path: "café notes.md", insertions: 1, deletions: 0 },
-          { path: "src/new.ts", insertions: 1, deletions: 0 },
-          { path: "src/old.ts", insertions: 0, deletions: 0 },
+          { path: "café notes.md", insertions: 1, deletions: 0, status: "modified" },
+          { path: "src/new.ts", insertions: 1, deletions: 0, status: "renamed" },
+          { path: "src/old.ts", insertions: 0, deletions: 0, status: "deleted" },
         ]);
         yield* driver.commit(cwd, "Commit selection", "", {
           stage: { filePaths: status.workingTree.files.map((file) => file.path) },
@@ -3916,9 +3958,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const status = yield* driver.statusDetails(nestedCwd);
 
         assert.deepEqual(status.workingTree.files, [
-          { path: "nested/new.txt", insertions: 0, deletions: 0 },
-          { path: "nested/tracked.txt", insertions: 1, deletions: 0 },
-          { path: "README.md", insertions: 1, deletions: 0 },
+          { path: "nested/new.txt", insertions: 0, deletions: 0, status: "untracked" },
+          { path: "nested/tracked.txt", insertions: 1, deletions: 0, status: "modified" },
+          { path: "README.md", insertions: 1, deletions: 0, status: "modified" },
         ]);
         // The root is what the paths above are relative to, not the nested cwd, and it keeps
         // the trailing space so the resolved editor target is the file that exists.
@@ -3951,13 +3993,61 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const status = yield* driver.statusDetails(nestedCwd);
 
         assert.deepEqual(status.workingTree.files, [
-          { path: "nested/new.txt", insertions: 0, deletions: 0 },
-          { path: "nested/tracked.txt", insertions: 1, deletions: 0 },
+          { path: "nested/new.txt", insertions: 0, deletions: 0, status: "untracked" },
+          { path: "nested/tracked.txt", insertions: 1, deletions: 0, status: "modified" },
         ]);
         assert.equal(
           NodeFS.realpathSync.native(status.workingTree.rootPath!),
           NodeFS.realpathSync.native(worktreePath),
         );
+      }),
+    );
+
+    it.effect("reports how each working-tree file changed", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "keep.ts", "keep\n");
+        yield* writeTextFile(cwd, "remove.ts", "remove\n");
+        yield* writeTextFile(cwd, "old name.ts", "rename me\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "add files"]);
+        yield* writeTextFile(cwd, "keep.ts", "keep\nedited\n");
+        yield* git(cwd, ["rm", "-q", "remove.ts"]);
+        yield* git(cwd, ["mv", "old name.ts", "new name.ts"]);
+        yield* writeTextFile(cwd, "staged.ts", "staged\n");
+        yield* git(cwd, ["add", "staged.ts"]);
+        yield* writeTextFile(cwd, "untracked.ts", "untracked\n");
+        const blob = yield* git(cwd, ["rev-parse", "HEAD:keep.ts"]);
+        const conflicts = [
+          ["AU", [2]],
+          ["UD", [1, 2]],
+          ["UA", [3]],
+          ["DU", [1, 3]],
+          ["AA", [2, 3]],
+          ["UU", [1, 2, 3]],
+        ] as const;
+        for (const [xy, stages] of conflicts) {
+          yield* writeTextFile(cwd, `${xy}.ts`, "conflicted\n");
+          yield* (yield* GitVcsDriver.GitVcsDriver).execute({
+            operation: "test.unmergedIndex",
+            cwd,
+            args: ["update-index", "--index-info"],
+            stdin: stages.map((stage) => `100644 ${blob} ${stage}\t${xy}.ts\n`).join(""),
+          });
+        }
+
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
+        const statuses = Object.fromEntries(
+          status.workingTree.files.map((file) => [file.path, file.status]),
+        );
+
+        assert.equal(statuses["keep.ts"], "modified");
+        assert.equal(statuses["remove.ts"], "deleted");
+        assert.equal(statuses["new name.ts"], "renamed");
+        assert.equal(statuses["staged.ts"], "added");
+        assert.equal(statuses["untracked.ts"], "untracked");
+        for (const [xy] of conflicts) assert.equal(statuses[`${xy}.ts`], "modified", xy);
       }),
     );
 
@@ -3998,6 +4088,44 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         assert.equal(status.hasUpstream, false);
         assert.equal(status.aheadCount, 0);
         assert.equal(status.behindCount, 0);
+      }),
+    );
+
+    it.effect("records no failed span reading status of a repository without a remote", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["checkout", "-b", "feature"]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const spans: Array<Tracer.NativeSpan> = [];
+        const tracer = Tracer.make({
+          span: (options) => {
+            const span = new Tracer.NativeSpan(options);
+            spans.push(span);
+            return span;
+          },
+        });
+        const traced = <A, E>(effect: Effect.Effect<A, E>) =>
+          Effect.gen(function* () {
+            spans.length = 0;
+            const exit = yield* effect.pipe(Effect.withTracer(tracer), Effect.exit);
+            const failedSpans = spans.flatMap((span) =>
+              span.status._tag === "Ended" && Exit.isFailure(span.status.exit) ? [span.name] : [],
+            );
+            return { exit, failedSpans };
+          });
+
+        const status = yield* traced(driver.statusDetailsRemote(cwd));
+        assert.isTrue(Exit.isSuccess(status.exit));
+        assert.deepStrictEqual(status.failedSpans, []);
+
+        // A caller that needs a remote still fails, in its own span.
+        const fetch = yield* traced(driver.fetchRefCommit({ cwd, ref: "refs/pull/1/head" }));
+        assert.include(
+          Exit.isFailure(fetch.exit) ? Cause.pretty(fetch.exit.cause) : "",
+          "No git remote is configured for this repository.",
+        );
+        assert.deepStrictEqual(fetch.failedSpans, ["GitVcsDriver.fetchRefCommit"]);
       }),
     );
 
@@ -4637,6 +4765,79 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           "post-checkout hook should see the server's LC_ALL",
         );
         assert.isTrue(Result.isSuccess(result), "worktree creation failed in the hook");
+      }),
+    );
+    it.effect("refreshes a new worktree's index once its checkout second is over", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        for (let file = 0; file < 50; file++) {
+          yield* writeTextFile(cwd, `src/file-${file}.txt`, `contents ${file}\n`);
+        }
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "more files"]);
+        const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "fresh");
+
+        // The refresh waits on the clock that stamps the files.
+        yield* TestClock.withLive(
+          driver.createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/fresh",
+          }),
+        );
+
+        // Git re-reads every entry stamped in the index's own second or later.
+        const indexPath = path.resolve(
+          worktreePath,
+          yield* git(worktreePath, ["rev-parse", "--git-path", "index"]),
+        );
+        const indexMtime = Option.getOrThrow((yield* fs.stat(indexPath)).mtime);
+        const indexSecond = Math.floor(indexMtime.getTime() / 1000);
+        const entrySeconds = Array.from(
+          (yield* git(worktreePath, ["ls-files", "--debug"])).matchAll(/^ {2}mtime: (\d+):/gm),
+          ([, seconds]) => Number(seconds),
+        );
+        assert.equal(entrySeconds.length, 51);
+        assert.deepEqual(
+          entrySeconds.filter((seconds) => seconds >= indexSecond),
+          [],
+        );
+      }),
+    );
+    it.effect("returns the worktree when its index refresh fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        // Something else takes the new worktree's index lock as soon as its checkout ends.
+        yield* writeTextFile(
+          cwd,
+          ".git/hooks/post-checkout",
+          '#!/bin/sh\ntouch "$(git rev-parse --git-path index).lock"\n',
+        );
+        yield* fs.chmod(path.join(cwd, ".git/hooks/post-checkout"), 0o755);
+        const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "locked");
+
+        const created = yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/locked",
+        });
+
+        assert.equal(created.worktree.path, worktreePath);
+        const indexPath = path.resolve(
+          worktreePath,
+          yield* git(worktreePath, ["rev-parse", "--git-path", "index"]),
+        );
+        assert.isTrue(yield* fs.exists(`${indexPath}.lock`));
       }),
     );
     it.effect.each(["commit", "short-commit", "tag", "revision"] as const)(

@@ -127,6 +127,7 @@ describe("GhosttyTerminalSurface visibility", () => {
       canvas,
       beginPath() {},
       clip() {},
+      getTransform: () => ({ a: 1, d: 1 }),
       rect() {},
       resetTransform() {},
       restore() {},
@@ -520,6 +521,22 @@ describe("GhosttyTerminalSurface visibility", () => {
     surface.write("\r\nrow 10\r\nrow 11");
     harness.pointer("pointermove", 53, 1, {}, 0, 50);
     expect(surface.getSelection()).toBe("row 6\nrow 7\nrow 8");
+  });
+
+  it("leaves mostly sideways wheel events to the scroller around it", async () => {
+    const harness = createHarness();
+    await harness.create();
+    const wheel = (deltaX: number, deltaY: number) => {
+      const event = Object.assign(new Event("wheel", { cancelable: true }), {
+        deltaX,
+        deltaY,
+        deltaMode: 0,
+      });
+      harness.canvas.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(wheel(-20, 1)).toBe(false);
+    expect(wheel(2, -60)).toBe(true);
   });
 
   it("does not activate a link replaced before pointer release", async () => {

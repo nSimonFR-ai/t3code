@@ -251,7 +251,6 @@ export function IssuesScreen(
             ? { index: initialIndex, viewOffset: initialAnchor.viewOffset, viewPosition: 0 }
             : undefined
         }
-        contentInsetStartAdjustment={Platform.OS === "ios" ? insets.top : 0}
         contentContainerStyle={{
           paddingBottom: Math.max(insets.bottom, workspace.bottomClearance),
         }}

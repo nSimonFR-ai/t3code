@@ -850,6 +850,13 @@ function makeReplayQueryRunner(
         readMcpResource: () => Effect.die("unexpected MCP resource read in replay"),
         callMcpTool: () => Effect.die("unexpected MCP tool call in replay"),
         listPermissionRules: Effect.die("unexpected permission rules read in replay"),
+        // Recorded CLIs answer no context-usage request, so replays keep plain usage.
+        getContextUsage: Effect.fail(
+          new ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError({
+            method: "getContextUsage",
+            cause: new Error("Unsupported control request subtype"),
+          }),
+        ),
         interrupt: replayEffect(() => {
           assertNextOutboundFrame({ type: "query.interrupt" });
         }),
@@ -2175,15 +2182,11 @@ async function recordClaudeForkSessionQuery(input: {
           type: "session.fork",
           sessionId: input.sessionId,
           options: {
-            dir: sanitizedReplayCwd(input.scenario),
             upToMessageId,
           },
         },
       });
-      const forked = await forkSession(input.sessionId, {
-        dir: input.cwd,
-        upToMessageId,
-      });
+      const forked = await forkSession(input.sessionId, { upToMessageId });
       forkedNativeSessionIds.push(forked.sessionId);
       input.entries.push({
         type: "emit_inbound",

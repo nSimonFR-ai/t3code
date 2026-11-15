@@ -13,7 +13,6 @@ import {
   type ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
-import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderCommitBatch from "./ProviderCommitBatch.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -29,7 +28,7 @@ import * as SqlError from "effect/sql/SqlError";
 
 import { replayAndBufferProjectedLiveEvents } from "./LiveStreamBudget.ts";
 import type { UnsequencedProjectEvent } from "../persistence/OrchestrationEventStore.ts";
-import { projectStoredEventForWire } from "./WireProjection.ts";
+import { projectStoredEventForWire } from "@t3tools/shared/wireProjection";
 import { makeRunOutcomeRecorder, type RunOutcome } from "./RunMetrics.ts";
 
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -80,9 +79,10 @@ const CurrentProviderBatch = Context.Reference<ProviderBatchPublication | undefi
 );
 
 export interface EventSinkV2Shape {
-  readonly consumeProviderEvents: <E, R, E2, R2>(
-    source: Stream.Stream<ProviderAdapter.ProviderAdapterV2Event, E, R>,
-    process: (event: ProviderAdapter.ProviderAdapterV2Event) => Effect.Effect<void, E2, R2>,
+  /** Items that are not provider snapshots, such as a consumer's own control items, never batch. */
+  readonly consumeProviderEvents: <A extends { readonly type: string }, E, R, E2, R2>(
+    source: Stream.Stream<A, E, R>,
+    process: (event: A) => Effect.Effect<void, E2, R2>,
     after: Effect.Effect<boolean, E2, R2>,
     canBatch: Effect.Effect<boolean, never, R2>,
   ) => Effect.Effect<
@@ -380,7 +380,11 @@ const layerBase: Layer.Layer<
                   event.payload.runId === null ? undefined : runOrdinals.get(event.payload.runId),
                 )
                 .pipe(Effect.map((payload) => ({ ...event, payload })))
-            : Effect.succeed(event),
+            : event.type === "provider-turn.updated" && event.driver === "claudeAgent"
+              ? projectionStore
+                  .carryProviderTurnContextUsage(event.threadId, event.payload)
+                  .pipe(Effect.map((payload) => ({ ...event, payload })))
+              : Effect.succeed(event),
         { concurrency: 1 },
       );
     };

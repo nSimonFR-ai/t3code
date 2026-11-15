@@ -47,6 +47,7 @@ import {
 
 import * as GitHubAppAccess from "./GitHubAppAccess.ts";
 import * as GitHubRest from "./GitHubRest.ts";
+import * as GitHubPullRequestEvents from "./gitHubPullRequestEvents.ts";
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as GitHubGraphQlClient from "./gitHubGraphQlClient.ts";
 import { PullRequestBatchesGraphQLGroup } from "./pullRequestBatches.graphql.ts";
@@ -330,7 +331,7 @@ const isRefusedRequestedReviewersOnly = (error: unknown): boolean =>
       path?.length === 6 &&
       path[0] === "repository" &&
       path[1] === "pullRequest" &&
-      path[2] === "reviewRequests" &&
+      (path[2] === "reviewRequests" || path[2] === "reviewRequestEvents") &&
       path[3] === "nodes" &&
       typeof path[4] === "number" &&
       Number.isInteger(path[4]) &&
@@ -481,6 +482,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly host: string;
       readonly number: number;
     }) => Effect.Effect<GitHubPullRequestWatchFingerprint | null, GitHubPullRequestApiError>;
+    readonly pullRequestEvents: Effect.Success<typeof GitHubPullRequestEvents.make>;
 
     readonly revalidateChecks: Effect.Success<typeof makeChecksRevalidator>;
 
@@ -2019,6 +2021,7 @@ export const make = Effect.gen(function* () {
 
     getPullRequestSummary,
     getPullRequestWatchFingerprint,
+    pullRequestEvents: yield* GitHubPullRequestEvents.make,
 
     getPullRequestDetail,
     getPullRequestPreview: Effect.fn("GitHubPullRequestApi.getPullRequestPreview")(
@@ -2220,12 +2223,26 @@ export const make = Effect.gen(function* () {
           input,
           50,
           (requestedReviewers) =>
-            client.ReviewThreads({ owner, name, number: input.number, requestedReviewers }),
+            client.ReviewThreads({
+              owner,
+              name,
+              number: input.number,
+              requestedReviewers,
+              requestEvents: requestedReviewers > 0,
+            }),
         ).pipe(graphql(target), Effect.map(toReviewThreadPage), Effect.flatMap(found(target)));
         const entries: GitHubReviewThreadEntry[] = [...first.threads];
         const avatarsByLogin = new Map(first.avatarsByLogin);
         const botLogins = new Set(first.botLogins);
-        const { reviewers, reactions, reactionsById, editedAtById, commits, viewer } = first;
+        const {
+          reviewers,
+          reactions,
+          reactionsById,
+          editedAtById,
+          commits,
+          viewer,
+          reviewRequests,
+        } = first;
         const dismissalsByReviewId = new Map(first.dismissalsByReviewId);
         const dismissalCursor = first.nextDismissalCursor;
         let cursor = first.nextCursor;
@@ -2299,6 +2316,7 @@ export const make = Effect.gen(function* () {
           botLogins,
           commits,
           viewer,
+          reviewRequests,
         };
       },
     ),

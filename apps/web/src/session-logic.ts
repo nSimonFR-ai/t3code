@@ -51,7 +51,6 @@ import * as DateTime from "effect/DateTime";
 import * as Equal from "effect/Equal";
 import { shallow } from "zustand/vanilla/shallow";
 
-export { formatDuration } from "@t3tools/shared/orchestrationTiming";
 export {
   workEntryDisplayIndicatesToolFailure,
   workEntryIndicatesToolFailure,
@@ -99,7 +98,7 @@ export type PendingUserInput = ThreadPendingUserInput;
 
 export type TimelineAttempt = Pick<
   OrchestrationV2RunAttempt,
-  "id" | "runId" | "attemptOrdinal" | "rootNodeId" | "status" | "completedAt"
+  "id" | "runId" | "attemptOrdinal" | "rootNodeId" | "status" | "startedAt" | "completedAt"
 >;
 
 export type TimelineEntry = (
@@ -457,7 +456,8 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
         item.steps.find((step) => step.status === "pending");
       return {
         ...common,
-        label: `Tasks ${done}/${item.steps.length}${current ? ` · ${current.text}` : ""}`,
+        label: `Tasks ${done}/${item.steps.length}`,
+        ...(current ? { detail: current.text } : {}),
       };
     }
     case "approval_request":

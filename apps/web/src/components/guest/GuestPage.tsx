@@ -39,7 +39,6 @@ import { useIncrementalTimelineEntries } from "~/hooks/useIncrementalTimelineEnt
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { useTheme } from "~/hooks/useTheme";
-import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { deriveActiveWorkStartedAt, derivePhase } from "~/session-logic";
 import { ComposerControl, ComposerControlIcon } from "../chat/ComposerControl";
@@ -57,6 +56,7 @@ import { useTimelineFollow } from "../chat/useTimelineFollow";
 import { GuestHtmlRender } from "./GuestHtmlRender";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
 import {
   applyGuestStreamEvent,
   formatGuestExpiry,
@@ -343,8 +343,8 @@ function GuestSession({ shareId }: { readonly shareId: string }) {
 function Notice({ title, detail }: { readonly title: string; readonly detail?: string }) {
   return (
     <div className="m-auto flex max-w-sm flex-col gap-1 p-6 text-center">
-      <p className="text-sm font-medium">{title}</p>
-      {detail ? <p className="text-xs text-muted-foreground">{detail}</p> : null}
+      <p className="text-label">{title}</p>
+      {detail ? <p className="text-meta text-muted-foreground">{detail}</p> : null}
     </div>
   );
 }
@@ -371,8 +371,8 @@ function NameForm({
   };
   return (
     <form className="m-auto flex w-full max-w-xs flex-col gap-3 p-6" onSubmit={submit}>
-      <h1 className="text-base font-medium">Join a shared thread</h1>
-      <label className="flex flex-col gap-1.5 text-sm" htmlFor="guest-name">
+      <h1 className="text-title">Join a shared thread</h1>
+      <label className="flex flex-col gap-1.5 text-body" htmlFor="guest-name">
         Your name
         <Input
           id="guest-name"
@@ -384,14 +384,14 @@ function NameForm({
         />
       </label>
       {error !== null ? (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-body text-destructive">
           {error}
         </p>
       ) : null}
       <Button type="submit" disabled={submitting || name.trim() === ""}>
         Join
       </Button>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-meta text-muted-foreground">
         The owner sees your name and approves each message before the agent gets it.
       </p>
     </form>
@@ -472,35 +472,10 @@ function GuestThread({
     ),
   );
   const unplaced = unplacedGuestMessages(messages, items, awaitingRowIds);
-  // The guest's waiting messages sit in the list footer, which the list does not follow on its
-  // own (the owner's view does the same in ChatView). A new one is the guest's own send, so it
-  // comes into view even if they had scrolled up, as the owner's send does. While following, the
-  // footer stays in view as it grows, such as when its images load.
-  const unplacedKey = unplaced.map((message) => message.id).join(",");
-  const previousUnplacedKey = useRef(unplacedKey);
-  const following = useRef(follow.timelineLiveFollowEnabled);
-  const scrollToEnd = useStableCallback(follow.scrollToEnd);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the timeline to the end after commit when new unplaced messages appear
-  useEffect(() => {
-    following.current = follow.timelineLiveFollowEnabled;
-    const previous = new Set(previousUnplacedKey.current.split(","));
-    previousUnplacedKey.current = unplacedKey;
-    if (unplacedKey.split(",").some((id) => id !== "" && !previous.has(id))) scrollToEnd(true);
-  }, [follow.timelineLiveFollowEnabled, unplacedKey, scrollToEnd, following, previousUnplacedKey]);
-  const footerRef = useRef<HTMLOListElement>(null);
-  const hasFooter = unplaced.length > 0;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- ResizeObserver on the footer keeps it scrolled into view while following
-  useEffect(() => {
-    const footer = footerRef.current;
-    if (!hasFooter || footer === null) return;
-    return observeResize(footer, () => {
-      if (following.current) scrollToEnd();
-    });
-  }, [hasFooter, scrollToEnd, following]);
   return (
     <>
       <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2.5">
-        <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{title}</h1>
+        <h1 className="min-w-0 flex-1 truncate text-label">{title}</h1>
         <ExpiryLabel expiresAt={expiresAt} />
       </header>
       <div className="relative min-h-0 flex-1">
@@ -538,9 +513,10 @@ function GuestThread({
             liveFollowEnabled={follow.timelineLiveFollowEnabled}
             onIsAtEndChange={follow.onIsAtEndChangeStable}
             onViewportAttach={follow.attachTimelineViewport}
+            onFooterGrow={follow.onTimelineFooterGrowStable}
             footer={
               unplaced.length === 0 ? null : (
-                <ol ref={footerRef} className="chat-content-lane flex flex-col gap-4 pb-4">
+                <ol className="chat-content-lane flex flex-col gap-4 pb-4">
                   {unplaced.map((message) => (
                     <li key={message.id}>
                       <UnplacedGuestMessage shareId={shareId} message={message} />
@@ -551,16 +527,15 @@ function GuestThread({
             }
           />
         </HostImageUrlContext>
-        {follow.showScrollToBottom ? (
-          <ScrollToEndButton
-            summary={null}
-            bottom={4}
-            onScrollToEnd={() => follow.scrollToEnd(true)}
-          />
-        ) : null}
+        <ScrollToEndButton
+          visible={follow.showScrollToBottom}
+          summary={[]}
+          bottom={4}
+          onScrollToEnd={() => follow.scrollToEnd(true)}
+        />
       </div>
       <div className={cn(LANE, "shrink-0 pb-4")}>
-        <GuestComposer shareId={shareId} model={model} />
+        <GuestComposer shareId={shareId} model={model} onSent={() => follow.scrollToEnd(true)} />
       </div>
     </>
   );
@@ -569,14 +544,14 @@ function GuestThread({
 function ExpiryLabel({ expiresAt }: { readonly expiresAt: string }) {
   const nowMinute = useNowMinute();
   return (
-    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+    <span className="shrink-0 text-meta text-muted-foreground tabular-nums">
       {formatGuestExpiry(expiresAt, Date.parse(`${nowMinute}Z`))}
     </span>
   );
 }
 
 const BUBBLE =
-  "flex min-w-0 max-w-[80%] flex-col gap-2 rounded-2xl p-3 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]";
+  "flex min-w-0 max-w-[80%] flex-col gap-2 rounded-pane p-3 text-body whitespace-pre-wrap [overflow-wrap:anywhere]";
 
 const openInNewTab = (url: string) => window.open(url, "_blank", "noopener,noreferrer");
 /** Guests have no image viewer; the browser shows the picture in its own tab. */
@@ -614,7 +589,7 @@ function UnplacedGuestMessage({
         />
         {message.text ? <span>{message.text}</span> : null}
       </div>
-      <p className="me-1 text-2xs text-muted-foreground">{STATUS_LABEL[message.status]}</p>
+      <p className="me-1 text-caption text-muted-foreground">{STATUS_LABEL[message.status]}</p>
     </div>
   );
 }
@@ -668,9 +643,12 @@ function StagedImage({ file }: { readonly file: File }) {
 function GuestComposer({
   shareId,
   model,
+  onSent,
 }: {
   readonly shareId: GuestShareView["shareId"];
   readonly model: GuestThreadModel;
+  /** The guest's own message comes into view even if they had scrolled up, as the owner's does. */
+  readonly onSent: () => void;
 }) {
   const [text, setText] = useState("");
   const [files, setFiles] = useState<ReadonlyArray<StagedFile>>([]);
@@ -706,6 +684,7 @@ function GuestComposer({
     setError(failure);
     // Keep anything typed or attached while the request was in flight.
     if (failure === null) {
+      onSent();
       setText((current) => (current.trim() === trimmed ? "" : current));
       setFiles((current) => current.filter((staged) => !sentFiles.includes(staged)));
     }
@@ -729,7 +708,7 @@ function GuestComposer({
   };
   return (
     <form
-      className="flex flex-col gap-2 rounded-3xl border border-border bg-card px-4 pt-3 pb-2.5 shadow-composer dark:shadow-composer-dark"
+      className="surface-composer flex flex-col gap-2 rounded-pane px-4 pt-3 pb-2.5 text-prompt"
       onSubmit={(event) => {
         event.preventDefault();
         void send();
@@ -755,10 +734,10 @@ function GuestComposer({
                   <StagedImage file={staged.file} />
                 </span>
               ) : (
-                <span className="flex min-w-0 items-center gap-2 ps-2 text-sm">
+                <span className="flex min-w-0 items-center gap-2 ps-2 text-body">
                   <PierreEntryIcon pathValue={staged.file.name} kind="file" theme={resolvedTheme} />
                   <span className="max-w-40 truncate">{staged.file.name}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
+                  <span className="shrink-0 text-meta text-muted-foreground">
                     {formatAttachmentSize(staged.file.size)}
                   </span>
                 </span>
@@ -778,7 +757,8 @@ function GuestComposer({
           ))}
         </ul>
       ) : null}
-      <textarea
+      <Textarea
+        unstyled
         aria-label="Message"
         placeholder="Message"
         rows={2}
@@ -787,7 +767,6 @@ function GuestComposer({
         onChange={(event) => setText(event.target.value)}
         onKeyDown={onKeyDown}
         onPaste={onPaste}
-        className="max-h-60 min-h-12 w-full resize-none bg-transparent text-sm outline-none field-sizing-content placeholder:text-placeholder"
       />
       <div className="flex items-center gap-3">
         <input
@@ -807,22 +786,23 @@ function GuestComposer({
         </ComposerControl>
         <GuestModelLabel model={model} />
         {error !== null ? (
-          <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
+          <p role="alert" className="min-w-0 flex-1 text-meta text-destructive">
             {error}
           </p>
         ) : (
-          <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+          <p className="min-w-0 flex-1 truncate text-meta text-muted-foreground">
             The owner approves each message
           </p>
         )}
-        <button
+        <Button
+          variant="pill"
+          size="icon"
           type="submit"
           aria-label="Send"
           disabled={sending || (text.trim() === "" && files.length === 0)}
-          className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full bg-message-action text-message-action-foreground shadow-xs hover:bg-message-action-hover focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-64"
         >
           <ArrowUpIcon aria-hidden className="size-4" />
-        </button>
+        </Button>
       </div>
     </form>
   );

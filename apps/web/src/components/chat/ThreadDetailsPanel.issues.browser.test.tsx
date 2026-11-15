@@ -129,6 +129,7 @@ const props: ThreadDetailsPanelProps = {
   threadId: threadRef.threadId,
   projectId: ProjectId.make("project"),
   worktreePath: null,
+  workspaceMutationId: null,
   isServerThread: false,
   activeProjectName: "Plain folder",
   activeProjectScripts: undefined,

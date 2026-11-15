@@ -145,7 +145,7 @@ function DependencySection({
         </p>
       ) : null}
       {page.error ? (
-        <Button size="xs" variant="outline" disabled={page.isPending} onClick={page.refresh}>
+        <Button size="xs" variant="secondary" disabled={page.isPending} onClick={page.refresh}>
           Retry dependencies
         </Button>
       ) : null}
@@ -185,7 +185,7 @@ function DependencySection({
           <DialogFooter>
             <Button
               size="sm"
-              variant="outline"
+              variant="secondary"
               disabled={pending}
               onClick={() => setEditing(false)}
             >

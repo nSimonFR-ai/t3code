@@ -536,9 +536,9 @@ export function mergePullRequestLists(
 ): MergedPullRequestList | null {
   if (answers.length === 0) return null;
   const viewers: Record<string, string> = {};
-  const truncatedEnvironments: string[] = [];
+  const truncatedEnvironments = new Set<string>();
   const providers = new Map<string, PullRequestListResult["providers"][number]>();
-  const entries: EnvironmentPullRequestEntry[] = [];
+  const entries = new Map<string, EnvironmentPullRequestEntry>();
   const errors: EnvironmentPullRequestError[] = [];
   const nextCursors: Record<string, PullRequestListCursors> = {};
   let truncated = false;
@@ -560,22 +560,28 @@ export function mergePullRequestLists(
             },
       );
     }
-    entries.push(...answer.entries.map((entry) => ({ ...entry, environmentId })));
+    for (const entry of answer.entries) {
+      const key = JSON.stringify([environmentId, entry.url]);
+      const held = entries.get(key);
+      if (held === undefined || entry.updatedAt > held.updatedAt) {
+        entries.set(key, { ...entry, environmentId });
+      }
+    }
     errors.push(...answer.errors.map((error) => ({ ...error, environmentId })));
     truncated ||= answer.truncated;
-    if (answer.truncated) truncatedEnvironments.push(environmentId);
+    if (answer.truncated) truncatedEnvironments.add(environmentId);
     if (Object.keys(answer.nextCursors).length > 0) {
-      nextCursors[environmentId] = answer.nextCursors;
+      nextCursors[environmentId] = { ...nextCursors[environmentId], ...answer.nextCursors };
     }
   }
   return {
     viewers,
     providers: [...providers.values()],
-    entries: entries.toSorted(comparePullRequestsByRecency),
+    entries: [...entries.values()].toSorted(comparePullRequestsByRecency),
     errors,
     truncated,
     nextCursors,
-    truncatedEnvironments,
+    truncatedEnvironments: [...truncatedEnvironments],
   };
 }
 
@@ -911,6 +917,49 @@ export function settlePullRequestOverrides<Entry extends PullRequestListEntry>(
     if (!agrees && !outranked) kept.set(key, override);
   }
   return kept.size === overrides.size ? overrides : kept;
+}
+
+export type PullRequestListItem<Entry extends ScopedEntry> =
+  | { readonly kind: "row"; readonly entry: Entry }
+  | { readonly kind: "stack"; readonly key: string; readonly entries: ReadonlyArray<Entry> };
+
+/**
+ * Folds the rows of one native stack into a single item where the first of them sat, its layers
+ * bottom first. A stack with one row shown stays a plain row: there is nothing to fold.
+ */
+export function clusterPullRequestStacks<Entry extends ScopedEntry>(
+  entries: ReadonlyArray<Entry>,
+): ReadonlyArray<PullRequestListItem<Entry>> {
+  const members = new Map<string, Entry[]>();
+  const stackKeyOf = (entry: Entry) =>
+    entry.stack === undefined
+      ? null
+      : `${entry.environmentId ?? ""}:${entry.host}:${entry.repository}#stack${entry.stack.number}`;
+  for (const entry of entries) {
+    const key = stackKeyOf(entry);
+    if (key === null) continue;
+    const list = members.get(key);
+    if (list) list.push(entry);
+    else members.set(key, [entry]);
+  }
+  const items: PullRequestListItem<Entry>[] = [];
+  const placed = new Set<string>();
+  for (const entry of entries) {
+    const key = stackKeyOf(entry);
+    const stack = key === null ? undefined : members.get(key);
+    if (key === null || stack === undefined || stack.length < 2) {
+      items.push({ kind: "row", entry });
+      continue;
+    }
+    if (placed.has(key)) continue;
+    placed.add(key);
+    items.push({
+      kind: "stack",
+      key,
+      entries: stack.toSorted((a, b) => (a.stack?.position ?? 0) - (b.stack?.position ?? 0)),
+    });
+  }
+  return items;
 }
 
 export type PullRequestQuickAction = "close" | "merge" | "ready" | "reopen";

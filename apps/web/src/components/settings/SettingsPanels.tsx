@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, RotateCcwIcon } from "lucide-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import {
@@ -22,6 +22,7 @@ import {
   type ResponseStreamingMode,
   type QuitConfirmationMode,
   SidebarProjectSortOrder,
+  ScreenReaderAnnouncements,
   ToolCallVisibility,
 } from "@t3tools/contracts/settings";
 import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
@@ -41,8 +42,6 @@ import {
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
 } from "../../components/desktopUpdate.logic";
-import { ProviderModelPicker } from "../chat/ProviderModelPicker";
-import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import {
@@ -69,14 +68,17 @@ import {
   resolveAppModelSelectionState,
   selectsPlanAgent,
 } from "../../modelSelection";
-import { providerInstanceEntriesFor } from "../../providerInstances";
+import { useTextGenerationTargets } from "../../textGenerators";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
-import { useEnvironmentProviders, useEnvironments } from "../../state/environments";
+import {
+  useEnvironmentProviders,
+  useEnvironments,
+  usePrimaryEnvironmentId,
+} from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
-import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
@@ -92,7 +94,6 @@ import {
   rememberEnabledProjectGroupingMode,
 } from "./SettingsPanels.logic";
 import {
-  SETTINGS_PICKER_TRIGGER_CLASSNAME,
   SettingResetButton,
   SettingsPageContainer,
   SettingsRow,
@@ -102,10 +103,13 @@ import { searchableSetting } from "./settingsSearch";
 import { BackgroundActivitySettingsRow } from "./BackgroundActivitySettings";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { PullRequestLinksOpenInAppSetting } from "./IntegrationsSettings";
-import { StorageCleanupSections } from "./StorageSettings";
+import { StorageCleanupSections, WorktreeCleanupSection } from "./StorageSettings";
+import { InputGroup, InputGroupInput, InputGroupUnit } from "../ui/input-group";
+import { SettingsModelPicker } from "./SettingsModelPicker";
 import { UpdateTrackSwitchDialog } from "./UpdateTrackSwitchDialog";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { environmentSessionStatesAtom } from "~/state/session";
+import { useCheckProviderUpdates } from "../ProviderUpdatesAction";
 import { canUpdateServer } from "../ServerUpdateAction";
 import { useUpdateEverythingRun } from "../sidebar/updateEverythingRun";
 import { awaitsTrackSwitch, channelSwitchLabel } from "../sidebar/updateEverything.logic";
@@ -158,6 +162,7 @@ function AboutVersionSection() {
   );
   // A second run would replace the first run's progress and local download.
   const updateRun = useUpdateEverythingRun();
+  const checkProviderUpdates = useCheckProviderUpdates();
 
   const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
   const selectedUpdateChannel = updateState?.channel ?? "latest";
@@ -216,6 +221,7 @@ function AboutVersionSection() {
           getDesktopUpdateInstallConfirmationMessage(
             updateState ?? { availableVersion: null, downloadedVersion: null },
           ),
+          { initialFocus: "confirm" },
         );
       } catch (error) {
         setIsUpdateActionPending(false);
@@ -248,6 +254,7 @@ function AboutVersionSection() {
     }
 
     if (typeof bridge.checkForUpdate !== "function") return;
+    void checkProviderUpdates();
     void bridge
       .checkForUpdate()
       .then((result) => {
@@ -310,7 +317,7 @@ function AboutVersionSection() {
               render={
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="secondary"
                   disabled={buttonDisabled || isUpdateActionPending}
                   onClick={handleButtonClick}
                 >
@@ -363,7 +370,8 @@ function AboutVersionSection() {
               }}
             >
               <SelectTrigger
-                size="sm"
+                variant="well"
+                size="compact"
                 className="w-full sm:w-40"
                 aria-label="Update track"
                 disabled={switchChannel !== null || updateRun !== null}
@@ -399,7 +407,12 @@ function AboutVersionSection() {
                 );
               }}
             >
-              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Update track">
+              <SelectTrigger
+                variant="well"
+                size="compact"
+                className="w-full sm:w-40"
+                aria-label="Update track"
+              >
                 <SelectValue>{HOSTED_APP_CHANNEL_LABEL}</SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -422,7 +435,7 @@ function AboutVersionSection() {
   );
 }
 
-export function useSettingsRestore(onRestored?: () => void) {
+function useSettingsRestore(onRestored?: () => void) {
   const {
     theme,
     setTheme,
@@ -431,6 +444,8 @@ export function useSettingsRestore(onRestored?: () => void) {
     setThemeHalf,
     clearThemeHalves,
     themeHalves,
+    blackChrome,
+    setBlackChrome,
   } = useTheme();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
@@ -445,10 +460,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(theme !== "system" ? ["Theme"] : []),
     ...(!followSystem ? ["Follow system"] : []),
     ...(themeHalves !== null ? ["Theme mix"] : []),
+    ...(blackChrome ? ["Black chrome"] : []),
     ...(settings.appearanceContrast !== DEFAULT_UNIFIED_SETTINGS.appearanceContrast
       ? ["Contrast"]
       : []),
-    ...(settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? ["Glass opacity"] : []),
     ...(settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme
       ? ["Diff colors"]
       : []),
@@ -459,12 +474,17 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.mathRenderingEnabled !== DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled
       ? ["Render math"]
       : []),
+    ...(settings.surfaceStyle !== DEFAULT_UNIFIED_SETTINGS.surfaceStyle ? ["Style"] : []),
     ...(settings.panelAnimationDurationMs !== DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs
       ? ["Panel animations"]
       : []),
     ...(settings.environmentIdentificationMode !==
     DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode
       ? ["Environment identification"]
+      : []),
+    ...(settings.hideWindowControlsWhenSidebarCollapsed !==
+    DEFAULT_UNIFIED_SETTINGS.hideWindowControlsWhenSidebarCollapsed
+      ? ["Hide window controls"]
       : []),
     ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
       ? ["Time format"]
@@ -504,10 +524,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? ["Snooze options"]
       : []),
     ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
-    ...(settings.persistComposerContextStrip !==
-    DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip
-      ? ["Composer context"]
-      : []),
     ...getChangedTypographySettingLabels(settings),
     ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
       ? ["Default diff file state"]
@@ -531,6 +547,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       : []),
     ...(settings.toolCallVisibility !== DEFAULT_UNIFIED_SETTINGS.toolCallVisibility
       ? ["Tool calls in chat"]
+      : []),
+    ...(settings.screenReaderAnnouncements !== DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements
+      ? ["Screen reader announcements"]
       : []),
     ...(settings.responseStreamingMode !== DEFAULT_UNIFIED_SETTINGS.responseStreamingMode
       ? ["Response streaming"]
@@ -622,6 +641,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       notifyThemeRestoreFailure();
       return;
     }
+    if (blackChrome && !setBlackChrome(false)) {
+      rollbackThemeState();
+      notifyThemeRestoreFailure();
+      return;
+    }
     if (needsFollowSystemReset && !setFollowSystem(true)) {
       rollbackThemeState();
       notifyThemeRestoreFailure();
@@ -633,11 +657,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
       effortDisplay: DEFAULT_UNIFIED_SETTINGS.effortDisplay,
       mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
+      surfaceStyle: DEFAULT_UNIFIED_SETTINGS.surfaceStyle,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
-      persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
       diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
@@ -647,8 +671,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       toolCallVisibility: DEFAULT_UNIFIED_SETTINGS.toolCallVisibility,
+      screenReaderAnnouncements: DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
-      glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
+      hideWindowControlsWhenSidebarCollapsed:
+        DEFAULT_UNIFIED_SETTINGS.hideWindowControlsWhenSidebarCollapsed,
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
@@ -723,27 +749,55 @@ function AutoSettleDaysInput({
   }
 
   return (
-    <Input
-      size="sm"
-      type="number"
-      min={MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
-      max={MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
-      className="w-full sm:w-24"
-      value={draft}
-      onChange={(event) => {
-        setDraft(event.target.value);
-        const parsed = Number(event.target.value);
-        if (
-          Number.isInteger(parsed) &&
-          parsed >= MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS &&
-          parsed <= MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS
-        ) {
-          onCommit(parsed);
-        }
-      }}
-      onBlur={() => setDraft(String(value))}
-      aria-label="Days of inactivity before auto-settle"
-    />
+    <InputGroup className="w-full sm:w-24">
+      <InputGroupInput
+        size="settings"
+        type="number"
+        min={MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+        max={MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          const parsed = Number(event.target.value);
+          if (
+            Number.isInteger(parsed) &&
+            parsed >= MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS &&
+            parsed <= MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS
+          ) {
+            onCommit(parsed);
+          }
+        }}
+        onBlur={() => setDraft(String(value))}
+        aria-label="Days of inactivity before auto-settle"
+      />
+      <InputGroupUnit>days</InputGroupUnit>
+    </InputGroup>
+  );
+}
+
+/** Restores every device setting from the settings and appearance headers. */
+export function RestoreDeviceDefaultsButton({ onRestored }: { onRestored?: () => void }) {
+  const { changedSettingLabels, restoreDefaults } = useSettingsRestore(onRestored);
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="inline-flex" />}>
+        <Button
+          size="standard"
+          variant="ghost"
+          aria-label="Restore device defaults"
+          disabled={changedSettingLabels.length === 0}
+          onClick={() => void restoreDefaults()}
+        >
+          <RotateCcwIcon className="size-3.5" />
+          <span className="max-sm:sr-only">Restore device defaults</span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">
+        {changedSettingLabels.length === 0
+          ? "Device settings already use their defaults."
+          : "Restore device defaults"}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -760,7 +814,7 @@ export function GeneralSettingsPanel() {
         <NotificationSettings />
         <SettingsRow
           {...searchableSetting("in-app-notifications")}
-          description="Show a toast when another thread finishes, fails, or needs input or approval while this app has focus."
+          description="Show a toast when another thread finishes, fails, or needs you."
           control={
             <Switch
               checked={settings.inAppNotificationsEnabled}
@@ -832,7 +886,12 @@ export function GeneralSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger size="sm" className="w-full sm:w-44" aria-label="Project order">
+              <SelectTrigger
+                variant="well"
+                size="compact"
+                className="w-full sm:w-44"
+                aria-label="Project order"
+              >
                 <SelectValue>
                   {SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]}
                 </SelectValue>
@@ -903,7 +962,7 @@ export function GeneralSettingsPanel() {
         />
         <SettingsRow
           {...searchableSetting("archive-confirmation")}
-          description="Require a second click on the inline archive action before a thread is archived."
+          description="Click archive twice before a thread is archived."
           resetAction={
             settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive ? (
               <SettingResetButton
@@ -975,7 +1034,8 @@ export function GeneralSettingsPanel() {
                 }}
               >
                 <SelectTrigger
-                  size="sm"
+                  variant="well"
+                  size="compact"
                   className="w-full sm:w-40"
                   aria-label="Quit shortcut behavior"
                 >
@@ -1019,7 +1079,12 @@ export function GeneralSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Timestamp format">
+              <SelectTrigger
+                variant="well"
+                size="compact"
+                className="w-full sm:w-40"
+                aria-label="Timestamp format"
+              >
                 <SelectValue>{TIMESTAMP_FORMAT_LABELS[settings.timestampFormat]}</SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -1102,7 +1167,8 @@ export function ChatSettingsPanel() {
               }}
             >
               <SelectTrigger
-                size="sm"
+                variant="well"
+                size="compact"
                 className="w-auto min-w-0 max-w-full"
                 aria-label="Send shortcut"
               >
@@ -1129,7 +1195,7 @@ export function ChatSettingsPanel() {
         <AdvancedSettings targetIds={[searchableSetting("skills-in-slash-menu").id]}>
           <SettingsRow
             {...searchableSetting("skills-in-slash-menu")}
-            description="Also include skills in the / command menu. Skills always appear when you type $."
+            description="Include skills in the / command menu."
             resetAction={
               settings.showSkillsInSlashMenu !== DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu ? (
                 <SettingResetButton
@@ -1185,7 +1251,12 @@ export function ChatSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger size="sm" className="w-auto min-w-0" aria-label="Follow-up behavior">
+              <SelectTrigger
+                variant="well"
+                size="compact"
+                className="w-auto min-w-0"
+                aria-label="Follow-up behavior"
+              >
                 <SelectValue>
                   {settings.followUpBehavior === "queue" ? "Queue" : "Steer"}
                 </SelectValue>
@@ -1201,6 +1272,7 @@ export function ChatSettingsPanel() {
 
       <SettingsSection id="activity" title="Activity">
         <ToolCallVisibilityRow />
+        <ScreenReaderAnnouncementsRow />
       </SettingsSection>
     </SettingsPageContainer>
   );
@@ -1255,6 +1327,65 @@ function ToolCallVisibilityRow() {
   );
 }
 
+const SCREEN_READER_ANNOUNCEMENTS_LABELS: Record<ScreenReaderAnnouncements, string> = {
+  status: "Status only",
+  messages: "Status and messages",
+  everything: "Everything",
+};
+
+const isScreenReaderAnnouncements = Schema.is(ScreenReaderAnnouncements);
+
+function ScreenReaderAnnouncementsRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      {...searchableSetting("screen-reader-announcements")}
+      description="What a screen reader hears from the open thread: a turn starting, needing you, and ending. Status and messages adds what the agent writes before its last message. Everything adds each step."
+      resetAction={
+        settings.screenReaderAnnouncements !==
+        DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements ? (
+          <SettingResetButton
+            label="screen reader announcements"
+            onClick={() =>
+              updateSettings({
+                screenReaderAnnouncements: DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Select
+          value={settings.screenReaderAnnouncements}
+          onValueChange={(value) => {
+            if (isScreenReaderAnnouncements(value)) {
+              updateSettings({ screenReaderAnnouncements: value });
+            }
+          }}
+        >
+          <SelectTrigger
+            size="sm"
+            className="w-full sm:w-48"
+            aria-label="Screen reader announcements"
+          >
+            <SelectValue>
+              {SCREEN_READER_ANNOUNCEMENTS_LABELS[settings.screenReaderAnnouncements]}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            {ScreenReaderAnnouncements.literals.map((value) => (
+              <SelectItem key={value} value={value}>
+                {SCREEN_READER_ANNOUNCEMENTS_LABELS[value]}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      }
+    />
+  );
+}
+
 function DiffColorsSettingsRow() {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
@@ -1281,7 +1412,12 @@ function DiffColorsSettingsRow() {
                 updateSettings({ diffColorScheme: value });
             }}
           >
-            <SelectTrigger size="sm" className="w-full min-w-0" aria-label="Diff colors">
+            <SelectTrigger
+              variant="well"
+              size="compact"
+              className="w-full min-w-0"
+              aria-label="Diff colors"
+            >
               <span
                 aria-hidden="true"
                 className={
@@ -1317,7 +1453,7 @@ export function DiffsSettingsPanel() {
       <SettingsSection id="diffs" title="Diffs">
         <SettingsRow
           {...searchableSetting("diff-layout")}
-          description="Show diffs stacked or side by side. The toggle in the diff toolbar changes this too."
+          description="Show diffs stacked or side by side."
           resetAction={
             settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ? (
               <SettingResetButton
@@ -1335,7 +1471,12 @@ export function DiffsSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Diff layout">
+              <SelectTrigger
+                variant="well"
+                size="compact"
+                className="w-full sm:w-40"
+                aria-label="Diff layout"
+              >
                 <SelectValue>{DIFF_LAYOUT_LABELS[settings.diffLayout]}</SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -1376,7 +1517,7 @@ export function DiffsSettingsPanel() {
         />
         <SettingsRow
           {...searchableSetting("default-diff-file-state")}
-          description="Start with files expanded or collapsed when opening diffs or a pull request's Code tab."
+          description="Start diff files expanded or collapsed."
           resetAction={
             settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed ? (
               <SettingResetButton
@@ -1399,7 +1540,8 @@ export function DiffsSettingsPanel() {
               }}
             >
               <SelectTrigger
-                size="sm"
+                variant="well"
+                size="compact"
                 className="w-full sm:w-40"
                 aria-label="Default diff file state"
               >
@@ -1422,7 +1564,7 @@ export function DiffsSettingsPanel() {
       <SettingsSection id="pull-requests" title="Pull requests">
         <SettingsRow
           {...searchableSetting("proactive-panels")}
-          description="Open linked pull requests first. Otherwise, open Changes for edits to at least 3 files or 50 lines."
+          description="Open the linked pull request, or Changes for larger edits."
           resetAction={
             settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled ? (
               <SettingResetButton
@@ -1487,7 +1629,12 @@ function ScopedCompactIdleThreadsRow() {
             if (mode) updateSettings({ idleCompaction: mode.value });
           }}
         >
-          <SelectTrigger size="sm" className="w-full sm:w-56" aria-label="Compact idle threads">
+          <SelectTrigger
+            variant="well"
+            size="compact"
+            className="w-full sm:w-56"
+            aria-label="Compact idle threads"
+          >
             <SelectValue>
               {(value: string | null) =>
                 value === null
@@ -1533,9 +1680,14 @@ export function ThreadsSettingsPanel() {
     (target) => target.serverConfig?.environment.capabilities.threadAutoSettlementScope === true,
   );
 
-  const textGenerationProviders = serverProviders.filter(
-    (provider) => provider.supportsTextGeneration !== false,
-  );
+  const textGenerationTargets = useTextGenerationTargets({
+    environmentId,
+    settings,
+    providers: serverProviders.filter((provider) => provider.supportsTextGeneration !== false),
+    projectId: target?.projectId ?? null,
+    selections: [settings.textGenerationModelSelection],
+  });
+  const textGenerationProviders = textGenerationTargets.providers;
   const textGenerationModelSelection = resolveAppModelSelectionState(
     settings,
     textGenerationProviders,
@@ -1543,11 +1695,7 @@ export function ThreadsSettingsPanel() {
   const textGenInstanceId = textGenerationModelSelection.instanceId;
   const textGenModel = textGenerationModelSelection.model;
   const textGenModelOptions = textGenerationModelSelection.options;
-  const textGenerationModelInstanceEntries = providerInstanceEntriesFor(
-    textGenerationProviders,
-    settings,
-    target?.projectId ?? null,
-  );
+  const textGenerationModelInstanceEntries = textGenerationTargets.entries;
   const hasTextGenerationProvider = textGenerationModelInstanceEntries.some(
     (entry) => entry.enabled && entry.isAvailable,
   );
@@ -1596,7 +1744,7 @@ export function ThreadsSettingsPanel() {
           }
           control={
             <DraftInput
-              size="sm"
+              size="settings"
               className="w-full sm:w-72"
               value={mixedAddProjectBaseDirectory ? "" : settings.addProjectBaseDirectory}
               onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
@@ -1780,7 +1928,7 @@ export function ThreadsSettingsPanel() {
           serverScoped
           settingKeys={["textGenerationModelSelection"]}
           {...searchableSetting("text-generation-model")}
-          description="Used for thread titles and other generated text on connected devices with this provider. Source control can override it."
+          description="For thread titles and other generated text. Source control has its own setting. Text generators from Providers also appear here."
           resetAction={
             hasServerTargets && isTextGenerationModelDirty ? (
               <SettingResetButton
@@ -1800,79 +1948,76 @@ export function ThreadsSettingsPanel() {
                 Connect an environment to choose its text generation model.
               </span>
             ) : !hasTextGenerationProvider ? (
-              <span className="text-sm text-muted-foreground">
+              <span className="text-body text-muted-foreground">
                 No text generation providers available.
               </span>
             ) : (
-              <div className="flex flex-wrap items-center justify-end gap-1.5">
-                <ProviderModelPicker
-                  environmentId={environmentId}
-                  activeInstanceId={textGenInstanceId}
-                  model={textGenModel}
-                  lockedProvider={null}
-                  instanceEntries={textGenerationModelInstanceEntries}
-                  modelOptionsByInstance={textGenerationModelOptionsByInstance}
-                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                  {...(mixedTextGenerationModel ? { triggerLabel: "Mixed" } : {})}
-                  getModelDisabledReason={textGenerationModelDisabledReason}
-                  {...(environmentId
+              <SettingsModelPicker
+                environmentId={environmentId}
+                activeInstanceId={textGenInstanceId}
+                model={textGenModel}
+                instanceEntries={textGenerationModelInstanceEntries}
+                modelOptionsByInstance={textGenerationModelOptionsByInstance}
+                {...(mixedTextGenerationModel ? { triggerLabel: "Mixed" } : {})}
+                getModelDisabledReason={textGenerationModelDisabledReason}
+                {...(environmentId
+                  ? {
+                      onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
+                        void navigate({
+                          to: "/settings/providers",
+                          search: { environmentId, instanceId },
+                        });
+                      },
+                    }
+                  : {})}
+                onInstanceModelChange={(instanceId, model) => {
+                  const reason = textGenerationModelDisabledReason(instanceId, model);
+                  if (reason) {
+                    toastManager.add({
+                      type: "error",
+                      title: "Text generation model not saved",
+                      description: reason,
+                    });
+                    return;
+                  }
+                  updateSettings({
+                    textGenerationModelSelection: resolveAppModelSelectionState(
+                      {
+                        ...settings,
+                        textGenerationModelSelection: createModelSelection(instanceId, model),
+                      },
+                      textGenerationProviders,
+                    ),
+                  });
+                }}
+                traits={
+                  textGenInstanceEntry && !mixedTextGenerationModel
                     ? {
-                        onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
-                          void navigate({
-                            to: "/settings/providers",
-                            search: { environmentId, instanceId },
+                        provider: textGenProvider,
+                        // The exact instance's models, so a custom text-gen
+                        // instance like `codex_personal` gets its own list.
+                        models: textGenInstanceEntry.models,
+                        modelOptions: textGenModelOptions,
+                        includePlanAgent: selectsPlanAgent(textGenModelOptions),
+                        onModelOptionsChange: (nextOptions) => {
+                          updateSettings({
+                            textGenerationModelSelection: resolveAppModelSelectionState(
+                              {
+                                ...settings,
+                                textGenerationModelSelection: createModelSelection(
+                                  textGenInstanceId,
+                                  textGenModel,
+                                  nextOptions,
+                                ),
+                              },
+                              textGenerationProviders,
+                            ),
                           });
                         },
                       }
-                    : {})}
-                  onInstanceModelChange={(instanceId, model) => {
-                    const reason = textGenerationModelDisabledReason(instanceId, model);
-                    if (reason) {
-                      toastManager.add({
-                        type: "error",
-                        title: "Text generation model not saved",
-                        description: reason,
-                      });
-                      return;
-                    }
-                    updateSettings({
-                      textGenerationModelSelection: resolveAppModelSelectionState(
-                        {
-                          ...settings,
-                          textGenerationModelSelection: createModelSelection(instanceId, model),
-                        },
-                        textGenerationProviders,
-                      ),
-                    });
-                  }}
-                />
-                {textGenInstanceEntry ? (
-                  <TraitsPicker
-                    provider={textGenProvider}
-                    models={textGenInstanceEntry?.models ?? []}
-                    model={textGenModel}
-                    modelOptions={textGenModelOptions}
-                    allowPromptInjectedEffort={false}
-                    includePlanAgent={selectsPlanAgent(textGenModelOptions)}
-                    triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                    onModelOptionsChange={(nextOptions) => {
-                      updateSettings({
-                        textGenerationModelSelection: resolveAppModelSelectionState(
-                          {
-                            ...settings,
-                            textGenerationModelSelection: createModelSelection(
-                              textGenInstanceId,
-                              textGenModel,
-                              nextOptions,
-                            ),
-                          },
-                          textGenerationProviders,
-                        ),
-                      });
-                    }}
-                  />
-                ) : null}
-              </div>
+                    : null
+                }
+              />
             )
           }
         />
@@ -1913,7 +2058,12 @@ export function ThreadsSettingsPanel() {
                   }
                 }}
               >
-                <SelectTrigger size="sm" className="w-full sm:w-56" aria-label="Response streaming">
+                <SelectTrigger
+                  variant="well"
+                  size="compact"
+                  className="w-full sm:w-56"
+                  aria-label="Response streaming"
+                >
                   <SelectValue>
                     {(value: ResponseStreamingMode | null) =>
                       value === null ? "Mixed" : RESPONSE_STREAMING_MODE_LABELS[value]
@@ -1946,7 +2096,9 @@ export function MaintenanceSettingsPanel() {
   const hasServerTargets = connectedEnvironments.length > 0;
 
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer className="max-w-[688px]">
+      <WorktreeCleanupSection title="Worktrees" />
+      <StorageCleanupSections />
       <SettingsSection id="updates" title="Updates">
         <SettingsRow
           serverScoped
@@ -1981,7 +2133,7 @@ export function MaintenanceSettingsPanel() {
           {...searchableSetting("continue-threads-after-server-update")}
           serverScoped
           settingKeys={["continueThreadsAfterServerUpdate"]}
-          description="Automatically resume interrupted threads after an update, crash, or machine restart on the selected environments."
+          description="Resume interrupted threads after an update, crash, or restart."
           status={
             !hasServerTargets
               ? "All selected connected environments must support restart continuation."
@@ -2020,8 +2172,6 @@ export function MaintenanceSettingsPanel() {
         <BackgroundActivitySettingsRow />
       </SettingsSection>
 
-      <StorageCleanupSections />
-
       <SettingsSection id="diagnostics-section" title="Diagnostics">
         <SettingsRow
           {...searchableSetting("diagnostics")}
@@ -2036,7 +2186,7 @@ export function MaintenanceSettingsPanel() {
                 <Link to="/settings/diagnostics" search={{ machine: environmentId ?? undefined }} />
               }
               size="sm"
-              variant="outline"
+              variant="secondary"
             >
               View diagnostics
             </Button>
@@ -2049,6 +2199,8 @@ export function MaintenanceSettingsPanel() {
 
 export function AboutSettingsPanel() {
   const primaryPolicy = usePrimaryManagedPolicy();
+  // The Welcome page sets up this computer, so it needs one.
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const telemetryOff = managedTelemetryOffMessage(primaryPolicy);
   return (
     <SettingsPageContainer>
@@ -2064,7 +2216,7 @@ export function AboutSettingsPanel() {
                     <a href={primaryPolicy.supportUrl} target="_blank" rel="noreferrer noopener" />
                   }
                   size="sm"
-                  variant="outline"
+                  variant="secondary"
                 >
                   Get help
                 </Button>
@@ -2084,6 +2236,17 @@ export function AboutSettingsPanel() {
           </>
         )}
         <MobileAppSettingsRow />
+        {primaryEnvironmentId === null ? null : (
+          <SettingsRow
+            {...searchableSetting("welcome-page")}
+            description="See your agents, import projects, and set up your phone."
+            control={
+              <Button size="sm" variant="secondary" render={<Link to="/welcome" />}>
+                Open
+              </Button>
+            }
+          />
+        )}
       </SettingsSection>
 
       <SettingsSection id="legal" title="Legal">
@@ -2098,7 +2261,7 @@ export function AboutSettingsPanel() {
             <Button
               render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}
               size="sm"
-              variant="outline"
+              variant="secondary"
             >
               View policy
             </Button>
@@ -2111,7 +2274,7 @@ export function AboutSettingsPanel() {
             <Button
               render={<Link to="/settings/open-source-licenses" />}
               size="sm"
-              variant="outline"
+              variant="secondary"
             >
               View licenses
             </Button>

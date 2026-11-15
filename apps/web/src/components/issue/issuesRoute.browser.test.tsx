@@ -47,6 +47,15 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   createFileRoute: () => (options: object) => ({ options, useSearch: () => state.search }),
   useNavigate: () => state.navigate,
 }));
+vi.mock("~/layout/pageNavigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/layout/pageNavigation")>()),
+  useLayoutPageLocation: () => ({
+    href: "/issues",
+    pathname: "/issues",
+    hash: "",
+    search: state.search,
+  }),
+}));
 vi.mock("~/connection/runtime", async () => {
   const { Atom } = await import("effect/reactivity");
   const Layer = await import("effect/Layer");
@@ -167,7 +176,8 @@ import {
   useRightPanelStore,
 } from "~/rightPanelStore";
 import { issueEnvironment } from "~/state/issues";
-import { Route, type IssuesSearch } from "../../routes/_chat.issues";
+import { IssuesPage } from "./IssuesPage";
+import { validateIssuesSearch, type IssuesSearch } from "./issuesSearch";
 
 const environmentA = EnvironmentId.make("environment-a");
 const environmentB = EnvironmentId.make("environment-b");
@@ -277,8 +287,7 @@ async function refresh() {
     container.querySelector<HTMLButtonElement>('[aria-label="Refresh issues"]')!.click(),
   );
 }
-const Page = Route.options.component!;
-await Page.preload?.();
+const Page = IssuesPage;
 
 it("keeps equal issue IDs on different accounts in separate rows, tabs and continuations", async () => {
   const a = { ...issue("1"), connectionId: "A", title: "Account A issue" };
@@ -708,7 +717,7 @@ it.each(
     const route = createRoute({
       getParentRoute: () => rootRoute,
       path: "/issues",
-      validateSearch: Route.options.validateSearch,
+      validateSearch: validateIssuesSearch,
       beforeLoad: ({ search }) => {
         state.search = search;
       },
@@ -1479,7 +1488,7 @@ it.each([
   const issues = createRoute({
     getParentRoute: () => chat,
     path: "issues",
-    validateSearch: Route.options.validateSearch,
+    validateSearch: validateIssuesSearch,
   });
   const router = createRouter({
     routeTree: root.addChildren([chat.addChildren([issues])]),
@@ -1515,7 +1524,7 @@ it.each<[string, string | null | undefined]>([
   const route = createRoute({
     getParentRoute: () => rootRoute,
     path: "/issues",
-    validateSearch: Route.options.validateSearch,
+    validateSearch: validateIssuesSearch,
     beforeLoad: ({ search }) => {
       state.search = search;
     },

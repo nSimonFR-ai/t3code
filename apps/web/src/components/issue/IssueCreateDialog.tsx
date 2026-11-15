@@ -520,7 +520,7 @@ export function IssueCreateDialog({
               <Label htmlFor="issue-create-body">Description</Label>
               <Textarea
                 id="issue-create-body"
-                size="lg"
+                size="default"
                 value={body}
                 disabled={pending}
                 onChange={(event) => {
@@ -547,7 +547,7 @@ export function IssueCreateDialog({
             />
           ) : null}
           {scope?.createFields === true && candidatesQuery.error !== null ? (
-            <Button size="xs" variant="outline" onClick={candidatesQuery.refresh}>
+            <Button size="xs" variant="secondary" onClick={candidatesQuery.refresh}>
               Retry fields
             </Button>
           ) : null}
@@ -602,7 +602,7 @@ export function IssueCreateDialog({
           {templateError !== null ? (
             <Button
               size="xs"
-              variant="outline"
+              variant="secondary"
               className="self-start"
               disabled={templateRead.isPending}
               onClick={templateRead.refresh}
@@ -614,7 +614,7 @@ export function IssueCreateDialog({
         <DialogFooter>
           <Button
             type="button"
-            variant="outline"
+            variant="secondary"
             size="sm"
             disabled={pending}
             onClick={() => onOpenChange(false)}

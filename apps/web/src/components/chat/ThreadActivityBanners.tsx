@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { Fragment } from "react";
 import { tickTextContent } from "~/lib/tickTextContent";
+import { BackgroundWorkDetails } from "./BackgroundWorkDetails";
 import { Button, InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
@@ -40,6 +41,7 @@ export function extensionStatusBannerItem(
     id: "pi-extension-status",
     variant: "default",
     icon: <span>▸</span>,
+    // oxlint-disable-next-line t3code/no-dot-separated-text -- Main's Pi extension status line; the redesign restyles it later.
     title: <output>{`Pi · ${statuses.map((status) => status.text).join(" · ")}`}</output>,
   };
 }
@@ -97,10 +99,12 @@ export function goalNowItem(input: {
   return {
     id: `goal:${input.threadId}`,
     icon: <TargetIcon />,
-    title:
-      presentation.usage === null
-        ? presentation.title
-        : `${presentation.title} · ${presentation.usage}`,
+    title: (
+      <span className="inline-flex flex-col">
+        <span>{presentation.title}</span>
+        {presentation.usage === null ? null : <span>{presentation.usage}</span>}
+      </span>
+    ),
     description: presentation.objective,
     // Clear stops goal work; Resume would stop unrelated work, so it waits.
     actions: (
@@ -112,7 +116,6 @@ export function goalNowItem(input: {
             >
               Resume
             </InlineButton>
-            <span aria-hidden>·</span>
           </>
         ) : null}
         <InlineButton
@@ -168,6 +171,7 @@ export function runStopNowItem(input: {
 
 /** Background commands and subagents, for the end of the timeline. */
 export function backgroundWorkNowItem(input: {
+  readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
   readonly turnItems: ThreadStructure["turnItems"];
@@ -216,7 +220,10 @@ export function backgroundWorkNowItem(input: {
     title:
       only && typeof only.label !== "string" && only.task.label !== only.task.kind ? (
         <>
-          {presentation.waiting ? "Waiting" : "Running"} · {only.label}
+          <span className="inline-flex flex-col">
+            <span>{presentation.waiting ? "Waiting" : "Running"}</span>
+            <span>{only.label}</span>
+          </span>
         </>
       ) : (
         presentation.title
@@ -246,6 +253,13 @@ export function backgroundWorkNowItem(input: {
             className="tabular-nums"
           />
         )}
+        <BackgroundWorkDetails
+          environmentId={input.environmentId}
+          threadId={input.threadId}
+          tasks={input.tasks}
+          turnItems={input.turnItems}
+          onOpenThread={onOpenThread}
+        />
         {onlyThreadId === undefined ? null : (
           <InlineButton tone="muted" onClick={() => onOpenThread(onlyThreadId)}>
             Open
@@ -271,28 +285,27 @@ export function branchMismatchBannerItem(input: {
   const { mismatch } = input;
   return {
     id: `branch-mismatch:${input.mismatchKey}`,
-    variant: "info",
+    variant: "warning",
     icon: <GitBranchIcon />,
-    title: (
-      <span className="flex min-w-0 items-baseline gap-1.5">
-        <span className="shrink-0 font-normal text-muted-foreground">Branch changed from</span>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <code className="min-w-0 truncate font-medium text-foreground">
-                {mismatch.threadBranch}
-              </code>
-            }
-          />
-          <TooltipPopup side="top">
-            This thread last ran on {mismatch.threadBranch}. Sending will continue on{" "}
-            {mismatch.currentBranch}.
-          </TooltipPopup>
-        </Tooltip>
-      </span>
+    title: "Branch changed",
+    description: (
+      <Tooltip>
+        <TooltipTrigger render={<span className="min-w-0 truncate" />}>
+          was {mismatch.threadBranch}
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          This thread last ran on {mismatch.threadBranch}. Sending will continue on{" "}
+          {mismatch.currentBranch}.
+        </TooltipPopup>
+      </Tooltip>
     ),
     actions: (
-      <Button size="xs" variant="ghost" disabled={input.restoreDisabled} onClick={input.onRestore}>
+      <Button
+        size="xs"
+        variant="secondary"
+        disabled={input.restoreDisabled}
+        onClick={input.onRestore}
+      >
         {input.restoring ? "Restoring..." : "Restore branch"}
       </Button>
     ),

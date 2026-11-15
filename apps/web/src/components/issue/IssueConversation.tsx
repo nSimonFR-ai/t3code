@@ -16,8 +16,8 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 import {
   PullRequestActorLabel,
   PullRequestCommentTime,
-  PullRequestMetaLine,
 } from "../pullRequest/pullRequestPresentation";
+import { PullRequestMetaLine } from "./issueListChrome";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestEditButton } from "../pullRequest/PullRequestEditButton";
 import { PullRequestCommentBody } from "../pullRequest/PullRequestCommentBody";

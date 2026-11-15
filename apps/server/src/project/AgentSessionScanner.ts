@@ -1,4 +1,5 @@
 import * as NodeOS from "node:os";
+import * as NodeSqlite from "node:sqlite";
 
 import {
   AgentSessionScanError,
@@ -55,9 +56,19 @@ class TranscriptParseError extends Schema.TaggedError<TranscriptParseError>()(
     return `Could not parse the transcript at ${this.filePath}.`;
   }
 }
+
+class CodexStateReadError extends Schema.TaggedError<CodexStateReadError>()("CodexStateReadError", {
+  databasePath: Schema.String,
+  cause: Schema.Defect(),
+}) {
+  override get message(): string {
+    return `Could not read Codex projects from ${this.databasePath}.`;
+  }
+}
 const METADATA_READ_BYTES = 8 * 1024;
 const MAX_TRANSCRIPT_SCAN_BYTES = 1024 * 1024;
 const MAX_CODEX_SESSION_INDEX_BYTES = 1024 * 1024;
+const MAX_CODEX_PROJECT_ROOT_ROWS = 100_000;
 
 const MAX_TRANSCRIPTS_PER_SOURCE = 5000;
 
@@ -159,7 +170,9 @@ const decodeCodexHistoryBase = Schema.decodeUnknownOption(
 );
 // Original rollouts end in their thread ID, rewound ones in `<thread ID>_<rollout ID>`.
 const CODEX_ROLLOUT_ID_PATTERN =
-  /[-_]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+  /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?\.jsonl$/i;
+// Codex records a chat's project only here; moving a chat leaves its rollout cwd unchanged.
+const CODEX_STATE_DATABASE = "state_5.sqlite";
 const decodeCodexSessionIndexEntry = Schema.decodeUnknownOption(
   Schema.fromJsonString(CodexSessionIndexEntry),
 );
@@ -224,6 +237,7 @@ interface RawCandidate {
   readonly transcripts: ReadonlyArray<{
     readonly filePath: string;
     readonly mtimeMs: number | null;
+    readonly projectRoots?: ReadonlyArray<string> | undefined;
   }>;
 }
 
@@ -233,6 +247,7 @@ interface TranscriptCandidate {
   readonly providerInstanceId: ProviderInstanceId;
   readonly homePath: string;
   readonly size: number;
+  readonly projectRoots?: ReadonlyArray<string> | undefined;
 }
 
 interface MetadataReadBudget {
@@ -240,18 +255,22 @@ interface MetadataReadBudget {
   operationsRemaining: number;
   recordsRemaining: number;
   truncated: boolean;
+  readonly multiplier: number;
 }
 
-function selectMetadataTranscripts(transcripts: ReadonlyArray<TranscriptCandidate>) {
+function selectMetadataTranscripts(
+  transcripts: ReadonlyArray<TranscriptCandidate>,
+  limit = MAX_TRANSCRIPTS_PER_SOURCE,
+) {
   const selected: Array<TranscriptCandidate> = [];
   let pending = Array.from(
     Map.groupBy(transcripts, (transcript) => transcript.providerInstanceId).values(),
     (entries) => entries.values(),
   );
-  while (pending.length > 0 && selected.length < MAX_TRANSCRIPTS_PER_SOURCE) {
+  while (pending.length > 0 && selected.length < limit) {
     const nextRound: typeof pending = [];
     for (const iterator of pending) {
-      if (selected.length === MAX_TRANSCRIPTS_PER_SOURCE) break;
+      if (selected.length === limit) break;
       const next = iterator.next();
       if (next.done) continue;
       selected.push(next.value);
@@ -964,10 +983,13 @@ export const make = Effect.gen(function* () {
             let remaining = "";
             let bytesRead = 0;
             let recordsRead = 0;
-            const maxBytes = Math.min(MAX_TRANSCRIPT_SCAN_BYTES, transcript.size);
+            const maxBytes = Math.min(
+              MAX_TRANSCRIPT_SCAN_BYTES * budget.multiplier,
+              transcript.size,
+            );
             const reserveRecord = () => {
               if (
-                recordsRead === MAX_METADATA_RECORDS_PER_TRANSCRIPT ||
+                recordsRead === MAX_METADATA_RECORDS_PER_TRANSCRIPT * budget.multiplier ||
                 budget.recordsRemaining === 0
               ) {
                 budget.truncated = true;
@@ -1234,6 +1256,47 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  const readCodexProjectRoots = Effect.fn("AgentSessionScanner.readCodexProjectRoots")(function* (
+    homePath: string,
+  ) {
+    const rootsByThread = new Map<string, Array<string>>();
+    const databasePath = path.join(homePath, CODEX_STATE_DATABASE);
+    return yield* Effect.try({
+      try: () => {
+        const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
+        try {
+          database.exec("PRAGMA busy_timeout = 100");
+          const rows = database
+            .prepare(
+              `SELECT threads.id AS id, project_roots.path AS path
+               FROM threads JOIN project_roots ON project_roots.project_id = threads.project_id
+               ORDER BY threads.rowid DESC, project_roots.position LIMIT ?`,
+            )
+            .all(MAX_CODEX_PROJECT_ROOT_ROWS);
+          for (const { id, path: root } of rows) {
+            if (typeof id !== "string" || typeof root !== "string" || root.trim().length === 0) {
+              continue;
+            }
+            const roots = rootsByThread.get(id);
+            if (roots === undefined) rootsByThread.set(id, [root]);
+            else roots.push(root);
+          }
+          return rootsByThread;
+        } finally {
+          database.close();
+        }
+      },
+      catch: (cause) => new CodexStateReadError({ databasePath, cause }),
+    }).pipe(Effect.orElseSucceed((): ReadonlyMap<string, ReadonlyArray<string>> => new Map()));
+  });
+
+  // Only chats left in an excluded folder, such as Codex's scratch folder, take their project's root.
+  const projectCwd = (cwd: string, projectRoots: ReadonlyArray<string> | undefined) =>
+    projectRoots !== undefined &&
+    isExcludedProjectPath(path.resolve(expandHomePath(cwd.trim(), homeDir)))
+      ? projectRoots[0]!
+      : cwd;
+
   const discoverCodexTranscripts = Effect.fn("AgentSessionScanner.discoverCodexTranscripts")(
     function* (homePath: string, providerInstanceId: ProviderInstanceId, operationBudget: number) {
       const sessionsDir = path.join(homePath, "sessions");
@@ -1295,7 +1358,15 @@ export const make = Effect.gen(function* () {
           }
         }
       }
-      return { transcripts, truncated };
+      const projectRoots = yield* readCodexProjectRoots(homePath);
+      return {
+        transcripts: transcripts.map((transcript) => {
+          const threadId = CODEX_ROLLOUT_ID_PATTERN.exec(transcript.filePath)?.[1];
+          const roots = threadId === undefined ? undefined : projectRoots.get(threadId);
+          return roots === undefined ? transcript : { ...transcript, projectRoots: roots };
+        }),
+        truncated,
+      };
     },
   );
 
@@ -1365,13 +1436,14 @@ export const make = Effect.gen(function* () {
         providerInstanceId: ProviderInstanceId;
         homePath: string;
         lastActiveAtMs: number;
-        transcripts: Array<{ filePath: string; mtimeMs: number }>;
+        transcripts: Array<TranscriptCandidate>;
       }
     >();
 
     for (const transcript of transcripts) {
-      const cwd = yield* readCwd(source, transcript, budget);
-      if (cwd === null || cwd === false) continue;
+      const rolloutCwd = yield* readCwd(source, transcript, budget);
+      if (rolloutCwd === null || rolloutCwd === false) continue;
+      const cwd = projectCwd(rolloutCwd, transcript.projectRoots);
       const key = `${transcript.providerInstanceId}\0${cwd}`;
       const existing = byOwnerAndCwd.get(key);
       if (existing) {
@@ -1399,7 +1471,9 @@ export const make = Effect.gen(function* () {
     }));
   });
 
-  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* () {
+  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* (
+    multiplier = 1,
+  ) {
     const settings = yield* serverSettings.getSettings.pipe(
       Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
     );
@@ -1482,9 +1556,10 @@ export const make = Effect.gen(function* () {
 
       const transcriptCandidates: Array<TranscriptCandidate> = [];
       const baseOperationBudget = Math.floor(
-        MAX_DISCOVERY_OPERATIONS_PER_SOURCE / Math.max(1, homes.length),
+        (MAX_DISCOVERY_OPERATIONS_PER_SOURCE * multiplier) / Math.max(1, homes.length),
       );
-      const extraOperationBudgets = MAX_DISCOVERY_OPERATIONS_PER_SOURCE % Math.max(1, homes.length);
+      const extraOperationBudgets =
+        (MAX_DISCOVERY_OPERATIONS_PER_SOURCE * multiplier) % Math.max(1, homes.length);
       for (const [index, home] of homes.entries()) {
         const operationBudget = baseOperationBudget + (index < extraOperationBudgets ? 1 : 0);
         if (operationBudget === 0) {
@@ -1506,15 +1581,19 @@ export const make = Effect.gen(function* () {
         (left, right) =>
           right.mtimeMs - left.mtimeMs || left.filePath.localeCompare(right.filePath),
       );
-      if (transcriptCandidates.length > MAX_TRANSCRIPTS_PER_SOURCE) {
+      if (transcriptCandidates.length > MAX_TRANSCRIPTS_PER_SOURCE * multiplier) {
         truncated = true;
       }
-      const selectedTranscripts = selectMetadataTranscripts(transcriptCandidates);
+      const selectedTranscripts = selectMetadataTranscripts(
+        transcriptCandidates,
+        MAX_TRANSCRIPTS_PER_SOURCE * multiplier,
+      );
       const metadataBudget: MetadataReadBudget = {
-        bytesRemaining: MAX_METADATA_BYTES_PER_SOURCE,
-        operationsRemaining: MAX_METADATA_OPERATIONS_PER_SOURCE,
-        recordsRemaining: MAX_METADATA_RECORDS_PER_SOURCE,
+        bytesRemaining: MAX_METADATA_BYTES_PER_SOURCE * multiplier,
+        operationsRemaining: MAX_METADATA_OPERATIONS_PER_SOURCE * multiplier,
+        recordsRemaining: MAX_METADATA_RECORDS_PER_SOURCE * multiplier,
         truncated: false,
+        multiplier,
       };
       raw.push(...(yield* groupTranscriptsByCwd(source, selectedTranscripts, metadataBudget)));
       truncated ||= metadataBudget.truncated;
@@ -1525,8 +1604,12 @@ export const make = Effect.gen(function* () {
 
   let cachedCandidates: ReadonlyArray<RawCandidate> | null = null;
 
+  // Refreshing a partial scan searches farther without removing the normal startup bounds.
+  // Keep retries finite even for corrupt transcripts or an exceptionally large session archive.
+  let scanMultiplier = 1;
   const scan: AgentSessionScanner["Service"]["scan"] = Effect.gen(function* () {
-    const { candidates: raw, truncated } = yield* collectCandidates();
+    const { candidates: raw, truncated } = yield* collectCandidates(scanMultiplier);
+    if (truncated) scanMultiplier = Math.min(scanMultiplier * 2, 16);
     cachedCandidates = raw;
 
     const merged = new Map<
@@ -1718,7 +1801,8 @@ export const make = Effect.gen(function* () {
           candidates.flatMap((candidate) =>
             candidate.source === "codex" && candidate.providerInstanceId === providerInstanceId
               ? candidate.transcripts.flatMap((transcript) => {
-                  const id = CODEX_ROLLOUT_ID_PATTERN.exec(transcript.filePath)?.[1];
+                  const match = CODEX_ROLLOUT_ID_PATTERN.exec(transcript.filePath);
+                  const id = match?.[2] ?? match?.[1];
                   return id === undefined ? [] : [[id, transcript.filePath] as const];
                 })
               : [],
@@ -1804,7 +1888,10 @@ export const make = Effect.gen(function* () {
           if (Option.isNone(snapshot.cwd)) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
-          const expandedCwd = expandHomePath(snapshot.cwd.value.trim(), homeDir);
+          const expandedCwd = expandHomePath(
+            projectCwd(snapshot.cwd.value, transcript.projectRoots).trim(),
+            homeDir,
+          );
           if (
             !path.isAbsolute(expandedCwd) ||
             (yield* directoryIdentity(path.resolve(expandedCwd))) !== rootIdentity

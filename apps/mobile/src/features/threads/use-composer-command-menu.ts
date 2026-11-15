@@ -49,6 +49,10 @@ import {
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
 } from "@t3tools/client-runtime/providerSkills";
+import {
+  formatComposerModelMention,
+  rankComposerModelMentions,
+} from "@t3tools/client-runtime/composer-model-mentions";
 import { useAtomRefresh } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import { useEffect, useState } from "react";
@@ -60,6 +64,7 @@ import {
   useComposerPullRequestSearch,
   useThreadSearch,
 } from "../../state/queries";
+import type { ModelOption } from "../../lib/modelOptions";
 import type { ComposerCommandItem } from "./ComposerCommandPopover";
 import { matchesSlashSkillQuery } from "./composerSlashSkillSearch";
 
@@ -173,6 +178,49 @@ export function buildComposerSlashCommandItems(input: {
   return items;
 }
 
+export function buildComposerModelItems(
+  modelOptions: ReadonlyArray<ModelOption>,
+  query: string,
+  providers: ReadonlyArray<ServerProvider>,
+): ComposerCommandItem[] {
+  // The picker retains saved selections even when their provider is no longer usable.
+  const readyProviderIds = new Set(
+    providers
+      .filter(
+        (provider) =>
+          provider.installed &&
+          provider.status === "ready" &&
+          provider.auth.status !== "unauthenticated" &&
+          provider.availability !== "unavailable",
+      )
+      .map((provider) => provider.instanceId),
+  );
+  return rankComposerModelMentions(
+    modelOptions.filter(
+      (option) =>
+        readyProviderIds.has(option.selection.instanceId) &&
+        !option.isUnavailable &&
+        !option.isHidden &&
+        !option.isLegacy,
+    ),
+    query,
+    (option) => ({
+      name: option.label,
+      ...(option.subtitle ? { subProvider: option.subtitle } : {}),
+      driverKind: option.providerDriver,
+      providerDisplayName: option.providerLabel,
+    }),
+  ).map((option) => ({
+    id: `model:${option.key}`,
+    type: "model",
+    option,
+    label: option.label,
+    description: option.subtitle
+      ? `${option.providerLabel} · ${option.subtitle}`
+      : option.providerLabel,
+  }));
+}
+
 export function resolveComposerCommandSelection(input: {
   readonly draftMessage: string;
   readonly trigger: Pick<ComposerTrigger, "rangeStart" | "rangeEnd">;
@@ -188,6 +236,8 @@ export function resolveComposerCommandSelection(input: {
     replacement = `/${item.command} `;
   } else if (item.type === "provider-slash-command") {
     replacement = `/${item.command.name} `;
+  } else if (item.type === "model") {
+    replacement = `${formatComposerModelMention(item.option.selection.instanceId, item.option.selection.model)} `;
   }
   return replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, replacement);
 }
@@ -211,6 +261,8 @@ export function useComposerCommandMenu({
   enabled = true,
   onChangeDraftMessage,
   onUsageLimits,
+  modelOptions,
+  modelProviders,
   onFreshSession,
   offersSideChat = false,
 }: {
@@ -233,6 +285,8 @@ export function useComposerCommandMenu({
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUsageLimits?: () => void;
+  readonly modelOptions?: ReadonlyArray<ModelOption>;
+  readonly modelProviders?: ReadonlyArray<ServerProvider>;
   /** Arms a fresh session for the next message; absent where `/clear` is unavailable. */
   readonly onFreshSession?: () => void;
   readonly offersSideChat?: boolean;
@@ -291,10 +345,11 @@ export function useComposerCommandMenu({
     cwd: trigger?.kind === "path" ? projectCwd : null,
     query: trigger?.kind === "path" ? trigger.query : null,
   });
+  const isThreadTrigger = trigger?.kind === "path" || trigger?.kind === "pull-request";
   // Mounts older settled threads matching the mention, which shells may leave out.
   useThreadSearch(
-    trigger?.kind === "path" && environmentId ? [environmentId] : [],
-    trigger?.kind === "path" ? trigger.query : "",
+    isThreadTrigger && environmentId ? [environmentId, ...linkedEnvironments.keys()] : [],
+    trigger?.query ?? "",
     { titlesOnly: true },
   );
   const pullRequestSearch = useComposerPullRequestSearch({
@@ -309,9 +364,21 @@ export function useComposerCommandMenu({
     if (!trigger) return [];
 
     if (trigger.kind === "pull-request") {
-      return pullRequestSearch.entries.map((entry) => ({
+      // `#` lists pull requests, then threads; a bare `#` offers the most recent threads.
+      const threadItems = environmentId
+        ? matchComposerThreadItems({
+            shells: threadShells,
+            environmentId,
+            linkedEnvironments,
+            excludeThreadId: currentThreadId,
+            query: trigger.query,
+            allowEmptyQuery: true,
+            now,
+          })
+        : [];
+      const pullRequestItems = pullRequestSearch.entries.map((entry) => ({
         id: `pr:${entry.projectId}:${entry.repository}:${entry.number}`,
-        type: "pull-request",
+        type: "pull-request" as const,
         pullRequest: {
           number: entry.number,
           title: entry.title,
@@ -328,6 +395,7 @@ export function useComposerCommandMenu({
             : `${entry.repository} · `
         }${entry.title}`,
       }));
+      return [...pullRequestItems, ...threadItems];
     }
 
     if (trigger.kind === "slash-command") {
@@ -462,9 +530,14 @@ export function useComposerCommandMenu({
       const environmentItems = environmentId
         ? matchComposerEnvironmentItems({ environments, environmentId, query: trigger.query })
         : [];
+      const modelItems =
+        modelOptions && modelProviders
+          ? buildComposerModelItems(modelOptions, trigger.query, modelProviders)
+          : [];
       return [
         ...threadItems,
         ...environmentItems,
+        ...modelItems,
         ...pathSearch.entries.map((entry) => {
           const parts = entry.path.split("/");
           return {
@@ -511,7 +584,7 @@ export function useComposerCommandMenu({
       return;
     }
     if (item.type === "thread") {
-      if (!ownerKey || trigger.kind !== "path") return;
+      if (!ownerKey || (trigger.kind !== "path" && trigger.kind !== "pull-request")) return;
       const shell = threadShells.find(
         (candidate) =>
           candidate.environmentId === item.thread.environmentId &&

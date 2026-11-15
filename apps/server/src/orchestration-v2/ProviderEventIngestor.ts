@@ -40,7 +40,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import { makeProviderFailureTurnItem } from "@t3tools/provider-core/server/failure";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
-import { boundFileChangeForStorage } from "./WireProjection.ts";
+import { boundFileChangeForStorage } from "@t3tools/shared/wireProjection";
 
 export class ProviderEventNormalizeError extends Schema.TaggedError<ProviderEventNormalizeError>()(
   "ProviderEventNormalizeError",
@@ -616,10 +616,40 @@ export const layer: Layer.Layer<
                 }),
               ];
             }
+            case "steer.updated": {
+              const item = yield* projections.getTurnItem({
+                threadId: input.event.threadId,
+                itemId: idAllocator.derive.userTurnItem({ messageId: input.event.messageId }),
+              });
+              if (
+                item?.type !== "user_message" ||
+                item.status === input.event.status ||
+                (item.status !== "pending" && item.status !== "completed")
+              ) {
+                return [];
+              }
+              const occurredAt = yield* DateTime.now;
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "turn-item.updated",
+                  threadId: item.threadId,
+                  payload: {
+                    ...item,
+                    status: input.event.status,
+                    completedAt: input.event.status === "pending" ? null : occurredAt,
+                    updatedAt: occurredAt,
+                  },
+                  runId: item.runId,
+                  nodeId: item.nodeId,
+                  occurredAt,
+                }),
+              ];
+            }
             case "background_work.updated":
               return [];
             case "command_output.delta":
-              // Live output is routed to the command output hub before ingestion.
+            case "prompt_suggestion.updated":
+              // The session manager serves these to clients before ingestion.
               return [];
             case "turn.terminal":
               const dismissed = yield* dismissNativeUserInputs(input, input.event.providerTurnId);

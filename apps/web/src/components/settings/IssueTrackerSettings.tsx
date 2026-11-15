@@ -82,7 +82,7 @@ export function IssueTrackerSettings({ environmentId }: { readonly environmentId
       <SettingsSection id={searchableSetting("issue-trackers").id} title="Issue trackers">
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
           <p className="text-xs text-destructive">{query.error}</p>
-          <Button size="xs" variant="outline" onClick={query.refresh}>
+          <Button size="xs" variant="secondary" onClick={query.refresh}>
             Retry
           </Button>
         </div>
@@ -248,11 +248,11 @@ function TrackerRow({
   };
 
   const status = unavailable ? (
-    <Badge variant="outline">Account unavailable</Badge>
+    <Badge variant="secondary">Account unavailable</Badge>
   ) : adding || !selected?.connected ? (
-    <Badge variant="outline">Not connected</Badge>
+    <Badge variant="secondary">Not connected</Badge>
   ) : selected.account === null ? (
-    <Badge variant="destructive">Not verified</Badge>
+    <Badge variant="error">Not verified</Badge>
   ) : (
     <Badge variant="secondary">Connected as {selected.account}</Badge>
   );
@@ -272,7 +272,7 @@ function TrackerRow({
             {multipleAccounts ? (
               <Button
                 size="xs"
-                variant="outline"
+                variant="secondary"
                 disabled={!canEdit || busy || adding}
                 onClick={() => {
                   setAdding(true);
@@ -285,7 +285,7 @@ function TrackerRow({
             {!adding && (selected?.connected || unavailable) ? (
               <Button
                 size="xs"
-                variant="outline"
+                variant="secondary"
                 disabled={!canEdit || busy || unavailable}
                 onClick={() => void submit(null)}
               >
@@ -405,7 +405,7 @@ function TrackerRow({
                 {adding ? (
                   <Button
                     size="sm"
-                    variant="outline"
+                    variant="secondary"
                     disabled={busy}
                     onClick={() => {
                       setAdding(false);
@@ -697,7 +697,7 @@ function ProjectBindingRow({
                 setKeys((current) => ({ ...current, [selected]: event.target.value }))
               }
             />
-            <Button type="submit" size="sm" variant="outline" disabled={locked || !key.trim()}>
+            <Button type="submit" size="sm" variant="secondary" disabled={locked || !key.trim()}>
               Bind
             </Button>
           </fieldset>

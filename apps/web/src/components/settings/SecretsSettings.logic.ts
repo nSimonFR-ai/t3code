@@ -5,6 +5,8 @@ import {
   isSecretReference,
   secretReferencesInSettings,
   type ServerSettings,
+  SimlockDeviceHostConfig,
+  TextGeneratorConfig,
   UsageLimitSourceConfig,
 } from "@t3tools/contracts";
 import { getProviderClient } from "@t3tools/client-runtime/provider-clients";
@@ -17,7 +19,9 @@ type SecretUseSettings = Pick<
   | "providerInstances"
   | "sourceControlHosts"
   | "usageLimitSources"
+  | "textGenerators"
   | "easDeviceHosts"
+  | "simlockDeviceHosts"
   | "cloudSpeechCredentials"
 >;
 
@@ -46,6 +50,7 @@ export function secretProviderUses(
           ? [
               {
                 id: `${ownerId}:${field}:${key ?? ""}`,
+                // oxlint-disable-next-line t3code/no-dot-separated-text -- Main's secret usage label; the redesign restyles it later.
                 label: `${owner} · ${key ?? labels.get(field) ?? field}`,
               },
             ]
@@ -64,6 +69,7 @@ export function secretProviderUses(
             ? [
                 {
                   id: `provider:${instanceId}:env:${variable.name}`,
+                  // oxlint-disable-next-line t3code/no-dot-separated-text -- Main's secret usage label; the redesign restyles it later.
                   label: `${owner} · ${variable.name}`,
                 },
               ]
@@ -89,13 +95,30 @@ export function secretProviderUses(
         source,
       ),
     ),
+    ...Object.entries(settings.textGenerators).flatMap(([id, generator]) =>
+      uses(
+        { settingsSchema: TextGeneratorConfig },
+        `text-generator:${id}`,
+        generator.label ?? generator.baseUrl,
+        generator,
+      ),
+    ),
     ...settings.easDeviceHosts.flatMap((host) =>
       uses({ settingsSchema: EasDeviceHostConfig }, `eas:${host.id}`, host.label, host),
+    ),
+    ...settings.simlockDeviceHosts.flatMap((host) =>
+      uses({ settingsSchema: SimlockDeviceHostConfig }, `simlock:${host.id}`, host.label, host),
     ),
     ...CloudSpeechProvider.literals.flatMap((provider) => {
       const credential = settings.cloudSpeechCredentials[provider];
       return isSecretReference(credential) && credential.provider === providerId
-        ? [{ id: `voice:${provider}`, label: `Voice · ${CLOUD_SPEECH_LABELS[provider]}` }]
+        ? [
+            {
+              id: `voice:${provider}`,
+              // oxlint-disable-next-line t3code/no-dot-separated-text -- Main's secret usage label; the redesign restyles it later.
+              label: `Voice · ${CLOUD_SPEECH_LABELS[provider]}`,
+            },
+          ]
         : [];
     }),
   ];

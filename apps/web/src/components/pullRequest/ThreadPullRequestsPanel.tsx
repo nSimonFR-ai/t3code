@@ -35,9 +35,9 @@ import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { RelativeTime } from "~/components/RelativeTime";
+import { PanelEmptyState } from "../PanelEmptyState";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { MiddleTruncate } from "../ui/middle-truncate";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { openLinkPullRequestDialog } from "./LinkPullRequestDialog";
 import { IssueGlyph } from "../issue/issuePresentation";
@@ -135,16 +135,17 @@ function LinkRowImpl({
     actionEntry !== null && pullRequestQuickActions(actionEntry, linkHostActions).length > 0;
   return (
     <div
-      className={cn(PULL_REQUEST_ROW_CLASS, "relative hover:bg-accent/60")}
+      // Content on the panel's 16px lines: the 6px list inset plus 10px of row padding a side.
+      className={cn(PULL_REQUEST_ROW_CLASS, "relative pr-2.5 hover:surface-ghost-hover")}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
         setMenuPosition({ x: event.clientX, y: event.clientY });
         setMenuOpen(true);
       }}
-      style={{ paddingLeft: `${0.5 + Math.min(depth, 3) * 1.25}rem` }}
+      style={{ paddingLeft: `${0.625 + Math.min(depth, 3) * 1.25}rem` }}
     >
-      {depth > 0 ? <span aria-hidden className="-ml-2 h-6 w-px shrink-0 bg-border/70" /> : null}
+      {depth > 0 ? <span aria-hidden className="-ml-2 h-6 w-px shrink-0 bg-border" /> : null}
       {snapshot === null ? (
         <PullRequestGlyph.pullRequest
           aria-label="Waiting for host state"
@@ -187,8 +188,15 @@ function LinkRowImpl({
               <TooltipTrigger render={<span className={PULL_REQUEST_ROW_NUMBER_CLASS} />}>
                 #{link.number}
               </TooltipTrigger>
+              {/* The repository lives here, not on the meta line, so the branches get its room. */}
               <TooltipPopup>
-                {SOURCE_LABELS[link.source]} · <RelativeTime timestamp={link.linkedAt} />
+                <span className="flex flex-col gap-0.5">
+                  <span>{link.repository}</span>
+                  <span>{SOURCE_LABELS[link.source]}</span>
+                  <span>
+                    linked <RelativeTime timestamp={link.linkedAt} />
+                  </span>
+                </span>
               </TooltipPopup>
             </Tooltip>
           }
@@ -264,12 +272,6 @@ function LinkRowImpl({
               ) : null}
               {snapshot !== null ? (
                 <>
-                  <Tooltip>
-                    <TooltipTrigger render={<span className="flex min-w-0 max-w-32 font-mono" />}>
-                      <MiddleTruncate value={link.repository} showTitle={false} />
-                    </TooltipTrigger>
-                    <TooltipPopup>{link.repository}</TooltipPopup>
-                  </Tooltip>
                   <PullRequestRowBranches head={snapshot.headBranch} base={snapshot.baseBranch} />
                 </>
               ) : (
@@ -297,11 +299,12 @@ function LinkRowImpl({
           "pointer-events-none opacity-0 group-hover/pr-row:pointer-events-auto group-hover/pr-row:opacity-100",
           "has-[[data-popup-open]]:pointer-events-auto has-[[data-popup-open]]:opacity-100",
           "has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100",
-          "group-has-[[data-pull-request-action-pending=true]]/pr-row:hidden",
+          // The row's quick actions come right before this span.
+          "[[data-pull-request-action-pending=true]~&]:hidden",
           speedMode && hasQuickActions && "hidden",
         )}
       >
-        <span aria-hidden className="absolute inset-0 bg-accent/60" />
+        <span aria-hidden className="absolute inset-0 surface-ghost-hover" />
         <Menu
           open={menuOpen}
           onOpenChange={(open) => {
@@ -480,34 +483,40 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
 
   if (linkCount === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-        <PullRequestGlyph.link aria-hidden className="size-6 text-muted-foreground/60" />
-        <p className="text-sm font-medium">
-          {thread === null ? "Loading linked items" : "No linked items"}
-        </p>
-        <p className="max-w-60 text-xs text-muted-foreground">
-          {issues.error ??
+      <div className="flex h-full flex-col">
+        <PanelEmptyState
+          icon={<PullRequestGlyph.link />}
+          title={thread === null ? "Loading linked items" : "No linked items"}
+          description={
+            issues.error ??
             (issuesEnabled
               ? "Pull requests and issues linked to this thread appear here. Link one from a URL or a number."
-              : "Pull requests the agent opens from this thread land here. Link one yourself from a URL or a number.")}
-        </p>
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => openLinkPullRequestDialog(threadRef)}>
-            <PlusIcon className="size-3.5" />
-            Link pull request
-          </Button>
-          {issuesEnabled ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!issues.canLink}
-              onClick={() => openLinkThreadIssueDialog(threadRef)}
-            >
-              <PlusIcon className="size-3.5" />
-              Link issue
-            </Button>
-          ) : null}
-        </div>
+              : "Pull requests the agent opens from this thread land here. Link one yourself from a URL or a number.")
+          }
+          action={
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => openLinkPullRequestDialog(threadRef)}
+              >
+                <PlusIcon className="size-3.5" />
+                Link pull request
+              </Button>
+              {issuesEnabled ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!issues.canLink}
+                  onClick={() => openLinkThreadIssueDialog(threadRef)}
+                >
+                  <PlusIcon className="size-3.5" />
+                  Link issue
+                </Button>
+              ) : null}
+            </div>
+          }
+        />
       </div>
     );
   }
@@ -532,7 +541,11 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
 
   return (
     <PullRequestSpeedModeContext value={speedMode}>
-      <div className="flex h-full min-h-0 flex-col">
+      {/* The list scrolls up under a pane's tab row (--surface-top-inset). */}
+      <div
+        className="flex h-[calc(100%+var(--surface-top-inset,0px))] min-h-0 flex-col"
+        data-surface-reaches-under-header=""
+      >
         {/* Threads that run a stack or a sweep link hundreds of pull requests; only the rows in
           view are mounted. The linked issues' trees ride above them as the list header. */}
         <LegendList<PullRequestListLine>
@@ -558,20 +571,33 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
           )}
           estimatedItemSize={44}
           drawDistance={440}
-          className="min-h-0 flex-1 overscroll-contain p-1.5"
+          className="min-h-0 flex-1 overscroll-contain p-1.5 pt-under-header-1.5"
         />
-        <footer className="flex items-center justify-between border-t border-border/60 px-2 py-1.5 text-2xs text-muted-foreground">
-          <span className="min-w-0 truncate">
-            {openCount} open · {linkCount} linked
-            {issues.error ? (
-              ` · ${issues.error}`
-            ) : lastSynced ? (
-              <>
-                {" · synced "}
-                <RelativeTime timestamp={lastSynced} />
-              </>
-            ) : null}
-          </span>
+        <footer className="flex items-center justify-between border-t border-border py-1.5 ps-4 pe-2.25 text-meta text-muted-foreground">
+          <Tooltip>
+            <TooltipTrigger render={<span className="flex min-w-0 flex-wrap gap-x-2" />}>
+              <span>{linkCount} linked</span>
+              <span>{openCount} open</span>
+              {issues.error ? (
+                <span>{issues.error}</span>
+              ) : lastSynced ? (
+                <span>
+                  synced <RelativeTime timestamp={lastSynced} />
+                </span>
+              ) : null}
+            </TooltipTrigger>
+            <TooltipPopup>
+              <span className="flex flex-col gap-0.5">
+                <span>{openCount} open</span>
+                {lastSynced ? (
+                  <span>
+                    synced <RelativeTime timestamp={lastSynced} />
+                  </span>
+                ) : null}
+              </span>
+            </TooltipPopup>
+          </Tooltip>
+          {/* Borderless: the footer's 9px end padding puts its ink, 7px inside, on the 16px line. */}
           <LinkMenu
             threadRef={threadRef}
             issuesEnabled={issuesEnabled}

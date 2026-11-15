@@ -61,6 +61,7 @@ export function IssueAssigneePicker({
 
   return (
     <PullRequestCandidatePicker
+      popupWidth="reviewers"
       icon={<UserPlusIcon className="size-3.5" />}
       label="Change assignees"
       allowed={allowed}

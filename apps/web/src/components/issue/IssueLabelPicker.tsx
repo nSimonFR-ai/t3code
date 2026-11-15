@@ -50,6 +50,7 @@ export function IssueLabelPicker({
 
   return (
     <PullRequestCandidatePicker
+      popupWidth="labels"
       icon={<TagIcon className="size-3.5" />}
       label="Change labels"
       allowed={allowed}

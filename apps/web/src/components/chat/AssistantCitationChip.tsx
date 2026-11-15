@@ -1,10 +1,11 @@
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { AssistantCitation } from "@t3tools/contracts";
 import {
   assistantCitationLabel,
   serializeAssistantCitation,
 } from "@t3tools/shared/assistantCitations";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowUpRightIcon, PencilIcon, QuoteIcon } from "lucide-react";
+import { ArrowUpRightIcon, MessageSquarePlusIcon, TextQuoteIcon } from "lucide-react";
 import {
   useEffect,
   useEffectEvent,
@@ -17,10 +18,11 @@ import {
   type AssistantCitationSourceAnchor,
 } from "~/lib/assistantTextSelection";
 import {
-  assistantCitationHash,
   assistantCitationNavigation,
+  assistantCitationRoute,
 } from "../../lib/assistantCitationNavigation";
 import { cn } from "~/lib/utils";
+import { useQuietThreadShell } from "~/state/entities";
 import { ContextChip, ContextChipAction, ContextChipLabel } from "../ContextChip";
 import { ContextChipPopover } from "../contextChipParts";
 import { Button } from "../ui/button";
@@ -52,15 +54,18 @@ export function AssistantCitationChip({
   };
 }) {
   const navigate = useNavigate();
+  const sourceThread = useQuietThreadShell(
+    scopeThreadRef(citation.environmentId, citation.threadId),
+  );
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const commentPopupRef = useRef<HTMLDivElement>(null);
+  const chipRef = useRef<HTMLSpanElement>(null);
   const draftCommentRef = useRef<string | null>(null);
   const [voiceSetupOpen, setVoiceSetupOpen] = useState(false);
   const [unavailableSourceAnchor, setUnavailableSourceAnchor] =
     useState<AssistantCitationSourceAnchor | null>(null);
   const commentOpen = commentEditor?.open ?? false;
   const sourceAnchor = commentEditor?.sourceAnchor;
-  const activeSourceAnchor = sourceAnchor === unavailableSourceAnchor ? undefined : sourceAnchor;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drops the uncommitted comment draft held in a ref once the parent closes the comment editor
   useEffect(() => {
     if (!commentOpen) draftCommentRef.current = null;
@@ -79,6 +84,7 @@ export function AssistantCitationChip({
     if (settleDraftOnClose("none")) {
       commentEditor?.onOpenChange(false);
     } else {
+      // Keep the draft mounted and stop tracking the detached range.
       setUnavailableSourceAnchor(sourceAnchor);
     }
   });
@@ -93,36 +99,21 @@ export function AssistantCitationChip({
       onUnavailable: onSourceUnavailable,
     });
   }, [citation, commentOpen, sourceAnchor, unavailableSourceAnchor]);
-  const popupAnchor = activeSourceAnchor
-    ? {
-        contextElement: activeSourceAnchor.source,
-        getBoundingClientRect: () => {
-          const rects = activeSourceAnchor.range.getClientRects();
-          const rect =
-            rects.item(rects.length - 1) ?? activeSourceAnchor.range.getBoundingClientRect();
-          // Code blocks and tables scroll sideways inside the message, so the cited
-          // text can end in their hidden overflow. Base UI only shifts the popup while
-          // it still touches the anchor, so clamp the anchor to the message's width.
-          const bounds = activeSourceAnchor.source.getBoundingClientRect();
-          const left = Math.min(Math.max(rect.left, bounds.left), bounds.right);
-          const right = Math.max(Math.min(rect.right, bounds.right), left);
-          return new DOMRect(left, rect.top, right - left, rect.height);
-        },
-      }
-    : undefined;
+  // In the composer the editor sits above the tray, left-aligned with it like the composer's
+  // menus, so it reads as editing this chip rather than floating over the cited passage.
+  const popupAnchor = composer
+    ? () => chipRef.current?.closest('[data-slot="composer-shell"]') ?? chipRef.current
+    : chipRef;
   const label = assistantCitationLabel(citation);
   const sourceLinkProps = {
-    to: "/$environmentId/$threadId" as const,
-    params: { environmentId: citation.environmentId, threadId: citation.threadId },
-    hash: assistantCitationHash(citation),
+    ...assistantCitationRoute(citation, sourceThread),
     "data-markdown-copy": serializeAssistantCitation(citation),
-    resetScroll: false,
     onClick: (event: ReactMouseEvent<HTMLAnchorElement>) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
         return;
       }
       event.preventDefault();
-      void navigate(assistantCitationNavigation(citation));
+      void navigate(assistantCitationNavigation(citation, sourceThread));
     },
   };
   const composerSourceLink = (
@@ -131,7 +122,7 @@ export function AssistantCitationChip({
       className="inline-flex min-w-0 items-center gap-[0.2em] self-baseline text-inherit no-underline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-current rounded-sm"
       aria-label={`View cited assistant text: ${label}`}
     >
-      <QuoteIcon aria-hidden="true" />
+      <TextQuoteIcon aria-hidden="true" />
       <ContextChipLabel className="max-w-[16em]" dir={textDirection(label)}>
         {label}
       </ContextChipLabel>
@@ -141,15 +132,15 @@ export function AssistantCitationChip({
     return (
       <ContextChipPopover
         kind="citation"
-        icon={<QuoteIcon />}
+        icon={<TextQuoteIcon />}
         label={label}
         accessibleLabel={`Quoted assistant text: ${label}`}
         copyMarkdown={serializeAssistantCitation(citation)}
       >
-        <div className="flex max-h-[calc(var(--available-height)_-_1rem_-_2px)] flex-col items-start gap-3 p-1 text-sm">
+        <div className="flex max-h-[calc(var(--available-height)_-_1rem_-_2px)] flex-col items-start gap-3 p-1 text-body">
           <AssistantCitationQuote citation={citation} />
           <PopoverClose
-            render={<Button variant="outline" size="sm" render={<Link {...sourceLinkProps} />} />}
+            render={<Button variant="secondary" size="sm" render={<Link {...sourceLinkProps} />} />}
           >
             <ArrowUpRightIcon aria-hidden="true" />
             Go to source
@@ -160,6 +151,7 @@ export function AssistantCitationChip({
   }
   return (
     <ContextChip
+      ref={chipRef}
       kind="citation"
       contentEditable={false}
       data-assistant-citation-chip="true"
@@ -182,18 +174,25 @@ export function AssistantCitationChip({
             data-citation-comment-trigger="true"
             render={<ContextChipAction />}
           >
-            <PencilIcon aria-hidden="true" />
+            <MessageSquarePlusIcon aria-hidden="true" />
           </PopoverTrigger>
           {commentEditor.open ? (
             <PopoverPopup
               // The editor stays mounted while its voice setup dialog replaces the popover.
               keepMounted
               {...composerFloatingLayerProps}
-              side={activeSourceAnchor ? "bottom" : "top"}
-              align="end"
+              side="top"
+              align="start"
+              sideOffset={composer ? 8 : 4}
               anchor={popupAnchor}
               initialFocus={() => {
-                commentInputRef.current?.focus({ preventScroll: true });
+                const input = commentInputRef.current;
+                if (input) {
+                  input.focus({ preventScroll: true });
+                  input.setSelectionRange(input.value.length, input.value.length);
+                  // Moving the caret doesn't scroll a long comment to it.
+                  input.scrollTop = input.scrollHeight;
+                }
                 return false;
               }}
               finalFocus={
@@ -212,7 +211,7 @@ export function AssistantCitationChip({
               }
               ref={commentPopupRef}
               aria-label="Edit citation comment"
-              width="md"
+              width="lg"
               padding="compact"
               onPointerDown={(event) => event.stopPropagation()}
             >
@@ -221,6 +220,9 @@ export function AssistantCitationChip({
                 citation={citation}
                 inputRef={commentInputRef}
                 onVoiceSetupOpenChange={setVoiceSetupOpen}
+                onViewSource={() => {
+                  void navigate(assistantCitationNavigation(citation, sourceThread));
+                }}
                 onDraftChange={(comment) => {
                   draftCommentRef.current = comment;
                   commentEditor.onDraftChange?.(comment);

@@ -1,10 +1,19 @@
-import { type CSSProperties, type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type FocusEvent,
+  type ReactNode,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+
+import { returnKeyboardToFocusedPane } from "~/layout/layoutPaneContext";
 import {
   type PreviewPanelInlineSize,
   usePreviewPanelInlineSize,
 } from "~/hooks/usePreviewPanelInlineSize";
 import { RESIZABLE_WIDTH_PROPERTY } from "~/hooks/useResizableWidth";
-import { workspaceAreaProps } from "../../lib/workspaceFocus";
+import { canReturnFocusTo, workspaceAreaProps } from "../../lib/workspaceFocus";
 import { cn } from "~/lib/utils";
 
 import { RightPanelResizeHandle } from "./RightPanelResizeHandle";
@@ -22,7 +31,21 @@ interface PreviewPanelShellProps {
   /** Use a distinct key per surface to keep remembered widths independent. */
   widthStorageKey?: string;
   defaultWidth?: number;
+  /**
+   * Inline only: the panel is its own inset pane, 8px of window chrome from the pane beside
+   * it (the layout's gap), with the resize handle in that gap. Below md panes are full-bleed.
+   */
+  pane?: boolean;
   children: ReactNode;
+}
+
+function returnPanelFocus(scope: Document | HTMLElement): boolean {
+  const target = scope.querySelector<HTMLElement>(
+    '[data-right-panel-toggle], button[data-layout-coach="tab"], button[data-layout-coach="new-tab"]',
+  );
+  if (!target) return returnKeyboardToFocusedPane();
+  target.focus({ preventScroll: true });
+  return target.ownerDocument.activeElement === target;
 }
 
 export function PreviewPanelShell(props: PreviewPanelShellProps) {
@@ -42,16 +65,35 @@ function ResizablePreviewPanelShell(props: PreviewPanelShellProps) {
   return <PreviewPanelShellFrame {...props} inlineSize={inlineSize} />;
 }
 
+// Prefers the element focus entered the panel from, falling back to the panel toggle.
+function returnFocus(
+  host: HTMLElement,
+  origin: HTMLElement | null,
+  scope: Document | HTMLElement = host.closest<HTMLElement>("[data-layout-pane-id]") ??
+    host.ownerDocument,
+) {
+  const { ownerDocument } = host;
+  // focus() is a no-op on a disabled origin, so activeElement says whether it took.
+  if (origin?.isConnected && !host.contains(origin) && canReturnFocusTo(origin)) {
+    origin.focus({ preventScroll: true });
+    if (ownerDocument.activeElement === origin) return true;
+  }
+  return returnPanelFocus(scope);
+}
+
 function PreviewPanelShellFrame(
   props: PreviewPanelShellProps & { inlineSize: PreviewPanelInlineSize },
 ) {
   const panelArea = workspaceAreaProps("panel", 4, props.workspaceLabel ?? "Workspace panel");
   const isInline = props.mode === "inline";
+  const pane = isInline && props.pane === true;
   const collapsible = isInline && props.open !== undefined;
   const open = props.open ?? true;
   const maximized = props.maximized ?? false;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const returnedFocus = useRef(false);
+  const focusOrigin = useRef<HTMLElement | null>(null);
+  const lastBlurred = useRef<EventTarget | null>(null);
   const { width, handlers, observeRow } = props.inlineSize;
   // Width animates only for an open or close. Any other width change disables
   // the transition in the same commit that changes the width, so the browser
@@ -84,50 +126,62 @@ function PreviewPanelShellFrame(
       stopObservingRow();
     };
   };
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- on unmount, returns DOM focus to the panel toggle if removal dropped it on the body
+  // React focus events, unlike a listener added in attachHost, also see content that focuses
+  // itself while mounting (a terminal does, from a ref that attaches before the host's).
+  // Focus moving within the panel, portalled menus included, first blurs an element of it.
+  const rememberFocusOrigin = (event: FocusEvent<HTMLDivElement>) => {
+    const from = event.relatedTarget;
+    if (from === null || from === lastBlurred.current) return;
+    focusOrigin.current = from instanceof HTMLElement ? from : null;
+  };
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- on unmount, returns DOM focus to where it came from if removal dropped it on the body
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host || !collapsible) return;
+    const focusScope = host.closest<HTMLElement>("[data-layout-pane-id]") ?? host.ownerDocument;
     return () => {
       if (!host.contains(host.ownerDocument.activeElement) && !returnedFocus.current) return;
+      const origin = focusOrigin.current;
       // Unmount moves the toggle; restore focus at its committed location if removal sent focus to body.
       queueMicrotask(() => {
         if (host.ownerDocument.activeElement === host.ownerDocument.body) {
-          host.ownerDocument.querySelector<HTMLButtonElement>("[data-right-panel-toggle]")?.focus();
+          returnFocus(host, origin, focusScope);
         }
       });
     };
   }, [collapsible, hostRef]);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- moves focus to the toggle and sets inert on the host DOM node before a collapse paints
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- moves focus out of the host and sets inert on it before a collapse paints
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const collapsed = collapsible && !open;
     if (!collapsed) returnedFocus.current = false;
-    // Move focus before making its current owner inert, while the toggle is reachable.
+    // Move focus before making its current owner inert, using its owning pane.
     if (collapsed && host.contains(host.ownerDocument.activeElement)) {
-      const toggle = host.ownerDocument.querySelector<HTMLButtonElement>(
-        "[data-right-panel-toggle]",
-      );
-      toggle?.focus();
-      returnedFocus.current = toggle !== null && host.ownerDocument.activeElement === toggle;
+      returnedFocus.current = returnFocus(host, focusOrigin.current);
     }
+    // An origin belongs to one open; the next one records its own.
+    if (collapsed) focusOrigin.current = null;
     host.toggleAttribute("inert", collapsed);
   }, [collapsible, open, hostRef]);
   return (
     <div
       ref={attachHost}
+      onFocus={rememberFocusOrigin}
+      onBlur={(event) => {
+        lastBlurred.current = event.target;
+      }}
       {...(props.workspaceArea ? panelArea : {})}
       data-workspace-focus-key={props.workspaceFocusKey}
       data-workspace-unavailable={collapsible && !open ? "true" : undefined}
       className={cn(
-        "relative flex h-full min-h-0 min-w-0 max-w-full flex-col self-stretch bg-background",
-        isInline
-          ? maximized
-            ? // Maximizing meets the sidebar border or window edge; omit the duplicate border.
-              "flex-1"
-            : "shrink-0 border-l border-border"
-          : "w-full",
+        "relative flex h-full min-h-0 min-w-0 max-w-full flex-col self-stretch",
+        pane
+          ? cn("[--preview-panel-gap:0px]", open && "md:ps-2 md:[--preview-panel-gap:0.5rem]")
+          : // A sheet shows its popover surface, the lift the narrow sidebar sheet has.
+            cn("[--preview-panel-gap:1px]", props.mode !== "sheet" && "bg-background"),
+        isInline ? (maximized ? "flex-1" : "shrink-0") : "w-full",
+        isInline && !pane && !maximized && "border-l border-border",
         collapsible &&
           "[[data-panel-animations=true]_&]:transition-[width] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out",
         collapsible && open && "[[data-panel-animations=true]_&]:starting:w-0!",
@@ -149,14 +203,16 @@ function PreviewPanelShellFrame(
       data-preview-panel-mode={props.mode}
       data-preview-panel-maximized={maximized ? "true" : "false"}
     >
-      {isInline && !maximized ? <RightPanelResizeHandle handlers={handlers} /> : null}
-      {/* Content stays pinned to the right edge, so closing uncovers the chat
-          instead of sliding the tab bar under the title bar controls. */}
+      {isInline && !maximized ? (
+        <RightPanelResizeHandle handlers={handlers} {...(pane ? { className: "md:left-0" } : {})} />
+      ) : null}
       <div
+        data-pane-notch-host={pane ? "" : undefined}
         className={cn(
           "h-full min-h-0 w-full",
           collapsible && "overflow-clip",
           collapsible && !maximized && "flex justify-end",
+          pane && "overflow-hidden bg-background surface-grain md:rounded-pane",
         )}
       >
         <div
@@ -166,7 +222,7 @@ function PreviewPanelShellFrame(
           )}
           style={
             collapsible && !maximized
-              ? { width: `calc(var(${RESIZABLE_WIDTH_PROPERTY}) - 1px)` }
+              ? { width: `calc(var(${RESIZABLE_WIDTH_PROPERTY}) - var(--preview-panel-gap))` }
               : undefined
           }
         >

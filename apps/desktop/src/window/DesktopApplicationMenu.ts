@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import type * as Electron from "electron";
+import * as Electron from "electron";
 
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
@@ -178,7 +178,8 @@ export const make = Effect.gen(function* () {
           { role: "services" },
           { type: "separator" },
           { role: "hide", label: `Hide ${environment.displayName}` },
-          { role: "hideOthers" },
+          // alt+cmd+H focuses the pane on the left; Hide Others keeps its item.
+          { role: "hideOthers", accelerator: "" },
           { role: "unhide" },
           { type: "separator" },
           { role: "quit", label: `Quit ${environment.displayName}` },
@@ -200,6 +201,17 @@ export const make = Effect.gen(function* () {
                 },
                 { type: "separator" as const },
               ]),
+          {
+            label: "Close Developer Tools",
+            accelerator: "CmdOrCtrl+W",
+            visible: false,
+            click: () => {
+              Electron.webContents
+                .getAllWebContents()
+                .find((contents) => !contents.isDestroyed() && contents.isDevToolsFocused())
+                ?.closeDevTools();
+            },
+          },
           // Cmd/Ctrl+W belongs to the renderer's tab close; it must never close the window.
           environment.platform === "darwin"
             ? { label: "Close Window", click: (_item, window) => window?.close() }
@@ -244,9 +256,10 @@ export const make = Effect.gen(function* () {
             accelerator: "Shift+CmdOrCtrl+R",
             click: mainContentsClick("forceReload"),
           },
+          // alt+cmd+I and J belong to the layout keys on macOS.
           {
             label: "Toggle Developer Tools",
-            accelerator: environment.platform === "darwin" ? "Alt+Command+I" : "Ctrl+Shift+I",
+            accelerator: environment.platform === "darwin" ? "Alt+Shift+Command+I" : "Ctrl+Shift+I",
             click: mainContentsClick("toggleDevTools"),
           },
           { type: "separator" },

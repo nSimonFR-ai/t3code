@@ -80,9 +80,15 @@ to show only actions.
 
 In a new thread, `Cmd+Shift+H` moves the draft to the next machine.
 
-In the composer, Return sends and `Shift+Return` inserts a new line. `Cmd+Return`
-also sends. To make Return insert a new line instead, change the Return key
-behavior in Settings → Keyboard.
+In the composer, Return sends and `Shift+Return` inserts a new line. While a
+turn is running, `Cmd+Return` sends with the other follow-up action. To make
+Return insert a new line instead, change the Return key behavior in Settings →
+Keyboard; `Cmd+Return` then sends.
+
+## Android
+
+With a hardware keyboard, the composer handles Return as on iPad, with `Ctrl` in
+place of `Cmd`. The on-screen keyboard's Return always inserts a new line.
 
 ## Edit the configuration file
 
@@ -119,13 +125,14 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 
 Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `rightPanelOpen`, `modelPickerOpen`, `usagePageOpen`, `composerFocus`,
-`draftThreadRoute`, `turnRunning`, `editableFocus`, `isWeb`, and `isDesktop`.
-`rightPanelOpen` applies only to `rightPanel.new` and is true while the right panel is
-open; the default `mod+t` uses it to open the panel's new-tab menu.
+`draftThreadRoute`, `turnRunning`, `assistantSelection`, `editableFocus`, `isWeb`, `isDesktop`, and `isMac`.
+`rightPanelOpen` is true while a side pane is open. `mod+t` opens a new tab in the
+focused pane.
 `draftThreadRoute` is true on a draft thread, including a restored draft, until it is first sent.
+`assistantSelection` is true while a citable passage of an assistant response is selected.
 `editableFocus` is true while a text field, the composer, or another editor has
 the keyboard. `isWeb` is true in a browser tab. `isDesktop` is true in the
-desktop app. Unknown keys evaluate to `false`.
+desktop app. `isMac` is true on macOS. Unknown keys evaluate to `false`.
 
 `mod+1` through `mod+9` jump to the first nine threads, and to models while the
 model picker is open. The thread jumps do not run while the model picker is open.
@@ -147,6 +154,13 @@ update an older server to enable it. Select **Retry** if a search fails. It defa
 `mod+f` outside terminals and previews. Press **Enter** or **Shift+Enter** to move between matches,
 and **Escape** to close find.
 
+## Find on a browser page
+
+`preview.find` (`mod+f` while a browser has focus) searches the open page in the desktop app. It
+is also in the browser's **⋮** menu and the command palette. A page that handles `mod+f` itself,
+such as a code editor, keeps its own find. Use the **⋮** menu to reach the browser's find there.
+Streamed browser tabs and T3 Code in a web browser do not support it.
+
 ## Precedence
 
 The last rule whose key and condition both match wins, even if it belongs to a
@@ -158,6 +172,9 @@ a shortcut.
 `thread.stop` interrupts the running turn in the focused thread. It has no default
 shortcut; assign one in **Settings → Keybindings**.
 
+`thread.regenerateTitle` generates a new title for the focused thread, like
+**Regenerate title** in the thread menu. It has no default shortcut.
+
 `thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
 bottom of the sidebar, such as unpin, settle, snooze, archive, or discarding a
 draft. Consecutive
@@ -167,7 +184,9 @@ in a text field such as the composer. Once you type or press another key, the
 field gets its own undo back. Terminals always keep their native shortcut.
 
 `navigation.back` (`mod+[` by default) and `navigation.forward` (`mod+]`) move
-through the pages you have visited, like a browser's back and forward buttons.
+through the pages you have visited, like the back and forward buttons next to the
+sidebar toggle. Both stop at the first page you opened in T3 Code, so in a browser
+they never leave the app; the browser's own buttons still can.
 
 `chat.new` may ask you to choose a project when there is more than one.
 `chat.newLocal` skips that chooser. Both use your
@@ -176,10 +195,11 @@ through the pages you have visited, like a browser's back and forward buttons.
 
 ## Reserved shortcuts
 
-In the desktop app, `mod+w` closes the focused terminal or the active right-panel
-tab. When nothing remains to close, it does nothing; it never closes the window. In a browser, `mod+w`
-closes the browser tab; rebind `rightPanel.close` and `terminal.close` to an available
-shortcut such as `alt+w`.
+In the desktop app, `mod+w` closes the focused terminal, the active side-pane tab,
+or the focused tab. It never closes the window. In a browser,
+`mod+t`, `mod+n` and `mod+w` belong to the browser; use `+`, the tab menu, or rebind
+`tab.new` and `tab.close` (`mod+alt+w` also closes a tab). The layout keys are in
+[Tabs, panes and workspaces](./layout.md).
 
 `mod+shift+t` reopens the last closed tab across the app, including files,
 diffs, pull requests, browsers, and devices, in the order you closed them.

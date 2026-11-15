@@ -89,7 +89,7 @@ function IssueSourceBodyEditor({
       <Textarea
         id={id}
         aria-label={label + " · " + source}
-        size="lg"
+        size="default"
         value={draft}
         maxLength={65_536}
         disabled={locked}
@@ -99,7 +99,7 @@ function IssueSourceBodyEditor({
         }}
       />
       <div className="flex justify-end gap-2">
-        <Button size="sm" variant="outline" disabled={saving} onClick={onCancel}>
+        <Button size="sm" variant="secondary" disabled={saving} onClick={onCancel}>
           Cancel
         </Button>
         <Button
@@ -266,7 +266,7 @@ function IssueAdfBodyEditor({
             key={name}
             type="button"
             size="xs"
-            variant="outline"
+            variant="secondary"
             disabled={locked}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => run(toggleMark(issueAdfSchema.marks[name]!))}
@@ -277,7 +277,7 @@ function IssueAdfBodyEditor({
         <Button
           type="button"
           size="xs"
-          variant="outline"
+          variant="secondary"
           disabled={locked}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => changeBlock("paragraph")}
@@ -289,7 +289,7 @@ function IssueAdfBodyEditor({
             key={level}
             type="button"
             size="xs"
-            variant="outline"
+            variant="secondary"
             disabled={locked}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => changeBlock("heading", level)}
@@ -300,7 +300,7 @@ function IssueAdfBodyEditor({
         <Button
           type="button"
           size="xs"
-          variant="outline"
+          variant="secondary"
           disabled={locked}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => run(wrapInList(issueAdfSchema.nodes.bulletList!))}
@@ -310,7 +310,7 @@ function IssueAdfBodyEditor({
         <Button
           type="button"
           size="xs"
-          variant="outline"
+          variant="secondary"
           disabled={locked}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => run(wrapInList(issueAdfSchema.nodes.orderedList!))}
@@ -320,7 +320,7 @@ function IssueAdfBodyEditor({
         <Button
           type="button"
           size="xs"
-          variant="outline"
+          variant="secondary"
           disabled={locked}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => run(liftListItem(issueAdfSchema.nodes.listItem!))}
@@ -330,7 +330,7 @@ function IssueAdfBodyEditor({
         <Button
           type="button"
           size="xs"
-          variant="outline"
+          variant="secondary"
           disabled={locked}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => changeBlock("codeBlock")}
@@ -340,7 +340,7 @@ function IssueAdfBodyEditor({
         <Button
           type="button"
           size="xs"
-          variant="outline"
+          variant="secondary"
           disabled={locked}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => {
@@ -353,7 +353,7 @@ function IssueAdfBodyEditor({
         <Button
           type="button"
           size="xs"
-          variant="outline"
+          variant="secondary"
           disabled={locked}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => run(undo)}
@@ -363,7 +363,7 @@ function IssueAdfBodyEditor({
         <Button
           type="button"
           size="xs"
-          variant="outline"
+          variant="secondary"
           disabled={locked}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => run(redo)}
@@ -377,7 +377,7 @@ function IssueAdfBodyEditor({
       </p>
       {error ? <p role="alert">{error}</p> : null}
       <div className="flex justify-end gap-2">
-        <Button size="sm" variant="outline" disabled={saving} onClick={onCancel}>
+        <Button size="sm" variant="secondary" disabled={saving} onClick={onCancel}>
           Cancel
         </Button>
         <Button size="sm" disabled={locked} onClick={save}>
@@ -401,7 +401,7 @@ function IssueAdfBodyEditor({
           <DialogFooter>
             <Button
               size="sm"
-              variant="outline"
+              variant="secondary"
               onClick={() => {
                 const editor = view.current;
                 if (editor)

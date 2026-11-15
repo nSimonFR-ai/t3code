@@ -48,6 +48,7 @@ type ComposerTraitsTarget = {
   instanceId: ProviderInstanceId;
   threadRef?: ScopedThreadRef | undefined;
   draftId?: DraftId | undefined;
+  onDraftModelOptionsChange?: () => void;
   model: string;
   models: ReadonlyArray<ServerProviderModel>;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
@@ -145,7 +146,7 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     ...(ultrathinkActive
       ? {
           composerFrameClassName: "ultrathink-frame",
-          composerSurfaceClassName: "shadow-[0_0_0_1px_rgba(255,255,255,0.07)_inset]",
+          composerSurfaceClassName: "inset-shadow-[0_0_0_1px_var(--border)]",
           modelPickerIconClassName: "ultrathink-chroma",
         }
       : {}),

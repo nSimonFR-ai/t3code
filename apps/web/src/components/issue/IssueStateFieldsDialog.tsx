@@ -57,7 +57,7 @@ export function IssueStateFieldsDialog({
           {!allowed ? <p role="alert">You cannot change the state here.</p> : null}
         </DialogPanel>
         <DialogFooter>
-          <Button size="sm" variant="outline" disabled={pending} onClick={onCancel}>
+          <Button size="sm" variant="secondary" disabled={pending} onClick={onCancel}>
             Cancel
           </Button>
           <Button

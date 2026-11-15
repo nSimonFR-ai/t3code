@@ -155,7 +155,8 @@ export function buildThreadActionMenuItems(
                 children: [
                   ...state.snoozePresets.map((preset) => ({
                     id: `snooze:${preset.id}` as const,
-                    label: `${preset.label} (${preset.whenLabel})`,
+                    label: preset.label,
+                    detail: preset.whenLabel,
                   })),
                   {
                     id: "snooze:custom" as const,
@@ -185,9 +186,7 @@ export function buildThreadActionMenuItems(
       ? [
           {
             id: "filter-by-project" as const,
-            label: state.projectFilter.isActive
-              ? "Show all projects"
-              : `Filter by ${state.projectFilter.label}`,
+            label: state.projectFilter.isActive ? "Show all projects" : "Show only this project",
             icon: "folder-tree",
           },
         ]
@@ -211,12 +210,12 @@ export function buildThreadActionMenuItems(
             children: [
               {
                 id: "auto-settle:enabled" as const,
-                label: "Enabled",
+                label: "Follow settings",
                 checked: state.autoSettleEnabled,
               },
               {
                 id: "auto-settle:disabled" as const,
-                label: "Disabled",
+                label: "Never",
                 checked: !state.autoSettleEnabled,
               },
             ],

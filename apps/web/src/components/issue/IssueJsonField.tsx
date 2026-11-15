@@ -278,7 +278,7 @@ function JsonNodeEditor({
                 ) : null}
                 <Button
                   size="xs"
-                  variant="outline"
+                  variant="secondary"
                   disabled={disabled}
                   aria-label={`Remove ${childLabel(index)}`}
                   onClick={() =>
@@ -314,7 +314,7 @@ function JsonNodeEditor({
           ) : null}
           <Button
             size="xs"
-            variant="outline"
+            variant="secondary"
             disabled={disabled}
             onClick={() => setValues([...values, emptyNode("text")], keys && [...keys, ""])}
           >
@@ -375,7 +375,7 @@ export function IssueJsonField({
         <div className="flex gap-2">
           <Button
             size="xs"
-            variant="outline"
+            variant="secondary"
             disabled={disabled || root === undefined}
             onClick={() => setSource(false)}
           >

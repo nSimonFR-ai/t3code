@@ -7,6 +7,8 @@ import {
 } from "@t3tools/client-runtime/state/pull-requests";
 import {
   PullRequestListResult,
+  PullRequestOperationError,
+  PullRequestUnavailableError,
   type EnvironmentId,
   type ProjectId,
   type PullRequestChecksState,
@@ -22,6 +24,7 @@ import {
   threadPullRequestKeyOf,
   visibleThreadPullRequests,
 } from "@t3tools/client-runtime/thread-pull-requests";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -29,6 +32,7 @@ import * as Schema from "effect/Schema";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   mergePullRequestLists,
   type EnvironmentPullRequestStat,
@@ -37,13 +41,8 @@ import {
 import { writePullRequestDetailSnapshot } from "../components/pullRequest/pullRequestDetail.logic";
 import { pullRequestChecksState } from "../components/pullRequest/pullRequestPresentation";
 import { useGuideRunStore } from "../components/pullRequest/guide/guideRunStore";
-import {
-  createMergedEnvironmentQuery,
-  type EnvironmentQueryTarget,
-} from "./mergedEnvironmentQuery";
+import { formatEnvironmentQueryError } from "./query";
 import { environmentThreadShells } from "./threads";
-
-export type { EnvironmentQueryTarget } from "./mergedEnvironmentQuery";
 
 export interface ObservedPullRequestSummary {
   readonly summary: PullRequestSummary;
@@ -521,9 +520,109 @@ export const pullRequestStackAtom = createPullRequestStackAtomFamily(
   pullRequestEnvironment.refreshes,
 );
 
+export interface EnvironmentQueryTarget<Input> {
+  readonly environmentId: EnvironmentId;
+  readonly input: Input;
+}
+
+interface MergedEnvironmentQueryView<A> {
+  readonly observations: ReadonlyArray<readonly [EnvironmentId, A, number]>;
+  readonly values: ReadonlyArray<readonly [EnvironmentId, A]>;
+  readonly error: string | null;
+  readonly isPending: boolean;
+}
+
+const failedListObservedAt = new WeakMap<object, number>();
+const isUnavailableList = Schema.is(PullRequestUnavailableError);
+const isFailedList = Schema.is(PullRequestOperationError);
+
+export function observeFailedPullRequestList(
+  result: AsyncResult.Failure<PullRequestListResult, unknown>,
+): { readonly value: PullRequestListResult; readonly observedAt: number } | undefined {
+  if (result.waiting) return undefined;
+  const error = Option.getOrNull(Cause.findErrorOption(result.cause));
+  if ((!isUnavailableList(error) && !isFailedList(error)) || error.listResult === undefined) {
+    return undefined;
+  }
+  let observedAt = failedListObservedAt.get(result.cause);
+  if (observedAt === undefined) {
+    observedAt = Date.now();
+    failedListObservedAt.set(result.cause, observedAt);
+  }
+  return { value: error.listResult, observedAt };
+}
+
+// Use one derived atom for variable fan-out; unreachable environments must not hide other rows.
+export function createMergedEnvironmentQuery<Input, A>(
+  label: string,
+  atomFor: (
+    target: EnvironmentQueryTarget<Input>,
+  ) => Atom.Atom<AsyncResult.AsyncResult<A, unknown>>,
+  observeFailure?: (
+    result: AsyncResult.Failure<A, unknown>,
+  ) => { readonly value: A; readonly observedAt: number } | undefined,
+) {
+  const family = Atom.family((key: string) =>
+    Atom.make((get): MergedEnvironmentQueryView<A> => {
+      const targets = JSON.parse(key) as ReadonlyArray<EnvironmentQueryTarget<Input>>;
+      const values: Array<readonly [EnvironmentId, A]> = [];
+      const observations: Array<readonly [EnvironmentId, A, number]> = [];
+      const pendingEnvironments = new Set<EnvironmentId>();
+      let error: string | null = null;
+      let isPending = false;
+      for (const target of targets) {
+        const result = get(atomFor(target));
+        isPending ||= result.waiting;
+        if (result.waiting) pendingEnvironments.add(target.environmentId);
+        if (result._tag === "Failure" && error === null) {
+          error = formatEnvironmentQueryError(result.cause);
+        }
+        const value = AsyncResult.getOrElse(result, () => null);
+        if (value !== null) values.push([target.environmentId, value]);
+        if (result._tag === "Success") {
+          observations.push([target.environmentId, result.value, result.timestamp]);
+        } else if (result._tag === "Failure") {
+          const observation = observeFailure?.(result);
+          if (observation !== undefined) {
+            observations.push([target.environmentId, observation.value, observation.observedAt]);
+          }
+        }
+      }
+      return {
+        values,
+        error,
+        isPending,
+        // Another batch can still find a readable checkout on this environment.
+        observations: observations.filter(
+          ([environmentId]) => !pendingEnvironments.has(environmentId),
+        ),
+      };
+    }).pipe(Atom.withLabel(`${label}:${key}`)),
+  );
+  const empty = Atom.make<MergedEnvironmentQueryView<A>>({
+    observations: [],
+    values: [],
+    error: null,
+    isPending: false,
+  }).pipe(Atom.withLabel(`${label}:empty`));
+  return function useMergedQuery(targets: ReadonlyArray<EnvironmentQueryTarget<Input>>) {
+    const key = JSON.stringify(targets);
+    const view = useAtomValue(targets.length === 0 ? empty : family(key));
+    const refresh = (override?: ReadonlyArray<EnvironmentQueryTarget<Input>>) => {
+      const refreshTargets =
+        override ?? (JSON.parse(key) as ReadonlyArray<EnvironmentQueryTarget<Input>>);
+      for (const atom of new Set(refreshTargets.map(atomFor))) {
+        appAtomRegistry.refresh(atom);
+      }
+    };
+    return { ...view, refresh };
+  };
+}
+
 const usePullRequestListsQuery = createMergedEnvironmentQuery(
   "web-pull-requests:list",
   pullRequestEnvironment.list,
+  observeFailedPullRequestList,
 );
 
 const usePullRequestStatsQuery = createMergedEnvironmentQuery(
@@ -559,6 +658,7 @@ export interface MergedPullRequestListView {
   readonly data: MergedPullRequestList | null;
   readonly error: string | null;
   readonly isPending: boolean;
+  readonly observations: ReadonlyArray<readonly [EnvironmentId, PullRequestListResult, number]>;
   readonly refresh: (targets?: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>>) => void;
 }
 
@@ -567,7 +667,13 @@ export function usePullRequestList(
 ): MergedPullRequestListView {
   const query = usePullRequestListsQuery(targets);
   const data = mergePullRequestLists(query.values);
-  return { data, error: query.error, isPending: query.isPending, refresh: query.refresh };
+  return {
+    data,
+    error: query.error,
+    isPending: query.isPending,
+    observations: query.observations,
+    refresh: query.refresh,
+  };
 }
 
 export function usePullRequestListStats(

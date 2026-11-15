@@ -83,10 +83,11 @@ import Migration0077 from "./Migrations/077_RepairBooleanSettledOverride.ts";
 import Migration0078 from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
 import Migration0079 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
 import Migration0080 from "./Migrations/080_ScheduledTaskThreadMode.ts";
-import Migration0081 from "./Migrations/081_IssueTrackerBindings.ts";
-import Migration0082 from "./Migrations/082_IssueTrackerBindingHost.ts";
-import Migration0083 from "./Migrations/083_IssueTrackerAccounts.ts";
-import Migration0084 from "./Migrations/084_IssueAccountStorage.ts";
+import Migration0081 from "./Migrations/081_ProjectionMessageSearchText.ts";
+import Migration0082 from "./Migrations/082_IssueTrackerBindings.ts";
+import Migration0083 from "./Migrations/083_IssueTrackerBindingHost.ts";
+import Migration0084 from "./Migrations/084_IssueTrackerAccounts.ts";
+import Migration0085 from "./Migrations/085_IssueAccountStorage.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -170,10 +171,11 @@ export const migrationEntries = [
   [78, "DropOrchestrationEventCorrelationIndex", Migration0078],
   [79, "DelegatedRecoveryIndexes", Migration0079],
   [80, "ScheduledTaskThreadMode", Migration0080],
-  [81, "IssueTrackerBindings", Migration0081],
-  [82, "IssueTrackerBindingHost", Migration0082],
-  [83, "IssueTrackerAccounts", Migration0083],
-  [84, "IssueAccountStorage", Migration0084],
+  [81, "ProjectionMessageSearchText", Migration0081],
+  [82, "IssueTrackerBindings", Migration0082],
+  [83, "IssueTrackerBindingHost", Migration0083],
+  [84, "IssueTrackerAccounts", Migration0084],
+  [85, "IssueAccountStorage", Migration0085],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -222,7 +224,7 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
   });
 });
 
-const FIRST_ISSUE_MIGRATION_ID = 81;
+const FIRST_ISSUE_MIGRATION_ID = 82;
 const ISSUE_MIGRATION_NAMES = [
   "IssueTrackerBindings",
   "IssueTrackerBindingHost",
@@ -323,6 +325,25 @@ const retireForkIssueStackMigrations = Effect.fn("retireForkIssueStackMigrations
       yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id IN (62, 63)`;
     }),
   );
+});
+
+const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
+
+// Mirrors the Migrator, which runs only ids above the highest recorded, plus the V2-preview reconciliation.
+export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const tables = yield* sql`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (tables.length === 0) return true;
+  const rows = yield* sql<{ readonly latestId: number | null; readonly previewRows: number }>`
+    SELECT
+      MAX(migration_id) AS latestId,
+      SUM(name = 'OrchestrationV2' AND migration_id IN (53, 54)) AS previewRows
+    FROM effect_sql_migrations
+  `;
+  const row = rows[0];
+  return (row?.latestId ?? 0) < latestMigrationId || (row?.previewRows ?? 0) > 0;
 });
 
 const run = Migrator.make({});
