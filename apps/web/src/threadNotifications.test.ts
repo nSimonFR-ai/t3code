@@ -101,4 +101,16 @@ describe("playNotificationSound", () => {
 
     expect(audio.started).toBe(1);
   });
+
+  it("stays quiet while the desktop screen is locked", async () => {
+    let locked = true;
+    vi.stubGlobal("window", { desktopBridge: { isScreenLocked: async () => locked } });
+    const { playNotificationSound } = await loadUnlocked();
+    await playNotificationSound("completion", () => true);
+    expect(audio.started).toBe(0);
+
+    locked = false;
+    await playNotificationSound("completion", () => true);
+    expect(audio.started).toBe(1);
+  });
 });

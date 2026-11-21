@@ -120,8 +120,11 @@ export async function playNotificationSound(
   const context = audioContext;
   const url = kind === "completion" ? completionUrl : inputUrl;
   try {
-    const decoded = await loadNotificationBuffer(context, url);
-    if (!shouldPlay() || context.state !== "running") return;
+    const [decoded, locked] = await Promise.all([
+      loadNotificationBuffer(context, url),
+      globalThis.window?.desktopBridge?.isScreenLocked?.().catch(() => false) ?? false,
+    ]);
+    if (locked || !shouldPlay() || context.state !== "running") return;
     // Coalesce same-sound bursts after decode to avoid clipping; input and completion alerts keep separate slots.
     if (context.currentTime < (playingUntil.get(url) ?? 0)) return;
     const source = context.createBufferSource();
