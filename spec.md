@@ -86,6 +86,12 @@ Where: `apps/web/src/rightPanelStore.ts`, `closedViewStore.ts` (`merge`), `compo
 
 Where: `isClaudeAmbientTaskStarted` and `handleSdkMessage` in `apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts`. Check: "does not keep the thread busy for Claude's ambient artifact watch" in `ClaudeAdapterV2.test.ts`. Upstream: pingdotgg/t3code#29331 (fixes #13978). Drop this section once upstream merges it.
 
+## 9. Quiet while the screen is locked
+
+- R9.1 The desktop app MUST NOT play a thread notification sound while the OS session is locked. On macOS this includes a display asleep behind a password. Desktop notifications and the badge are unchanged. Web and mobile are unchanged (a browser cannot see the lock).
+
+Where: `IS_SCREEN_LOCKED_CHANNEL` in `apps/desktop/src/ipc/methods/notificationBadge.ts` (`powerMonitor.getSystemIdleState(1) === "locked"`), `isScreenLocked` on the desktop bridge, checked in `playNotificationSound` (`apps/web/src/threadNotifications.ts`). Check: "stays quiet while the desktop screen is locked" in `threadNotifications.test.ts`.
+
 ## Dropped
 
 - Claude Code mod UI (pingdotgg/t3code#15827, #17432). Upstream closed both, and this fork dropped them at 0.1.4.

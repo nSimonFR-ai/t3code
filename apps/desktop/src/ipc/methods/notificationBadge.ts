@@ -5,7 +5,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ElectronApp from "../../electron/ElectronApp.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
-import { SET_NOTIFICATION_BADGE_CHANNEL } from "../channels.ts";
+import { IS_SCREEN_LOCKED_CHANNEL, SET_NOTIFICATION_BADGE_CHANNEL } from "../channels.ts";
 
 const NotificationBadge = Schema.Struct({
   count: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 2_147_483_647 })),
@@ -62,6 +62,15 @@ export const installNotificationBadge = Effect.fn("desktop.ipc.installNotificati
             if (badge.count > 0 && Electron.BrowserWindow.getFocusedWindow()) clear();
             else applyNotificationBadge(platform, badge);
           }),
+      }),
+    );
+    yield* ipc.handle(
+      DesktopIpc.makeIpcMethod({
+        channel: IS_SCREEN_LOCKED_CHANNEL,
+        payload: Schema.Void,
+        result: Schema.Boolean,
+        // macOS also reports "locked" once the display sleeps behind a password.
+        handler: () => Effect.sync(() => Electron.powerMonitor.getSystemIdleState(1) === "locked"),
       }),
     );
     yield* app.on("browser-window-focus", clear);

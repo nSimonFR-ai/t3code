@@ -1087,6 +1087,8 @@ export interface DesktopBridge {
   getClientPlatform: () => string;
   setNotificationBadge: (badge: { count: number; image: string | null }) => Promise<void>;
   onNotificationBadgeClear: (listener: () => void) => () => void;
+  /** Whether the OS session is locked (incl. a display asleep behind a password), so notification sounds stay quiet. */
+  isScreenLocked?: () => Promise<boolean>;
   onTrackpadScrollBegin: (listener: () => void) => () => void;
   onTrackpadScrollEnd: (listener: () => void) => () => void;
   /**
