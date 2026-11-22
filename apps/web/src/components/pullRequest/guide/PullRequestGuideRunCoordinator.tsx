@@ -112,8 +112,10 @@ function watchGuideRun(
     };
     const mode = getClientSettings().notificationMode;
     if (hasNotificationSound(mode)) {
-      void playNotificationSound(failure === null ? "completion" : "input", () =>
-        hasNotificationSound(getClientSettings().notificationMode),
+      void playNotificationSound(
+        failure === null ? "completion" : "input",
+        () => hasNotificationSound(getClientSettings().notificationMode),
+        () => getClientSettings().notificationSoundWhileLocked,
       );
     }
     if (looking) {

@@ -101,4 +101,65 @@ describe("playNotificationSound", () => {
 
     expect(audio.started).toBe(1);
   });
+
+  describe("while the screen is locked", () => {
+    const screen = { state: "locked" as "locked" | "unlocked" };
+    beforeEach(() => {
+      screen.state = "locked";
+      vi.stubGlobal(
+        "IdleDetector",
+        class {
+          get screenState() {
+            return screen.state;
+          }
+          start() {
+            return Promise.resolve();
+          }
+        },
+      );
+    });
+
+    it("stays quiet when the setting is off", async () => {
+      const { playNotificationSound } = await loadUnlocked();
+      await playNotificationSound(
+        "completion",
+        () => true,
+        () => false,
+      );
+      expect(audio.started).toBe(0);
+
+      screen.state = "unlocked";
+      await playNotificationSound(
+        "completion",
+        () => true,
+        () => false,
+      );
+      expect(audio.started).toBe(1);
+    });
+
+    it("still plays by default", async () => {
+      const { playNotificationSound } = await loadUnlocked();
+      await playNotificationSound("completion", () => true);
+      expect(audio.started).toBe(1);
+    });
+
+    it("still plays when the lock screen can't be watched", async () => {
+      vi.stubGlobal(
+        "IdleDetector",
+        class {
+          screenState = null;
+          start() {
+            return Promise.reject(new DOMException("denied", "NotAllowedError"));
+          }
+        },
+      );
+      const { playNotificationSound } = await loadUnlocked();
+      await playNotificationSound(
+        "completion",
+        () => true,
+        () => false,
+      );
+      expect(audio.started).toBe(1);
+    });
+  });
 });

@@ -113,16 +113,44 @@ export function unlockNotificationAudio() {
   }
 }
 
+interface ScreenStateDetector {
+  readonly screenState: "locked" | "unlocked" | null;
+  start(options: { threshold: number }): Promise<void>;
+}
+let screenDetector: Promise<ScreenStateDetector | undefined> | undefined;
+
+/**
+ * Chromium's Idle Detection API sees the OS lock screen. The desktop app grants it
+ * without a prompt; where it is denied, the screen counts as unlocked.
+ */
+function isScreenLocked(): Promise<boolean> {
+  const Detector = (globalThis as { IdleDetector?: new () => ScreenStateDetector }).IdleDetector;
+  if (!Detector) return Promise.resolve(false);
+  if (!screenDetector) {
+    const detector = new Detector();
+    // The threshold only governs the user state; the screen state updates at once.
+    screenDetector = detector
+      .start({ threshold: 60_000 })
+      .then(() => detector)
+      .catch(() => undefined);
+  }
+  return screenDetector.then((detector) => detector?.screenState === "locked");
+}
+
 export async function playNotificationSound(
   kind: "completion" | "input",
   shouldPlay: () => boolean,
+  playWhileLocked: () => boolean = () => true,
 ) {
   if (!audioContext || audioContext.state !== "running") return;
   const context = audioContext;
   const url = kind === "completion" ? completionUrl : inputUrl;
   try {
-    const decoded = await loadNotificationBuffer(context, url);
-    if (!shouldPlay() || context.state !== "running") return;
+    const [decoded, locked] = await Promise.all([
+      loadNotificationBuffer(context, url),
+      playWhileLocked() ? false : isScreenLocked(),
+    ]);
+    if (!shouldPlay() || (locked && !playWhileLocked()) || context.state !== "running") return;
     // Coalesce same-sound bursts after decode to avoid clipping; input and completion alerts keep separate slots.
     if (context.currentTime < (playingUntil.get(url) ?? 0)) return;
     const source = context.createBufferSource();
