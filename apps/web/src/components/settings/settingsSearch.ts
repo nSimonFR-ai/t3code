@@ -727,6 +727,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("notification sound alert completion input approval desktop")],
   },
   {
+    id: "notification-sound-while-locked",
+    title: msg("Sound while the screen is locked"),
+    to: "/settings/general",
+    searchTerms: [msg("notification sound mute quiet lock screen sleep away desktop")],
+  },
+  {
     id: "in-app-notifications",
     title: msg("In-app notifications"),
     to: "/settings/general",

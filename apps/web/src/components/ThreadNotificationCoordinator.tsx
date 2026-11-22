@@ -157,8 +157,10 @@ export function startThreadNotifications(
                 ? m(msg("Guest request"))
                 : m(msg("Input needed"));
     if (hasNotificationSound(mode)) {
-      void playNotificationSound(kind, () =>
-        hasNotificationSound(getClientSettings().notificationMode),
+      void playNotificationSound(
+        kind,
+        () => hasNotificationSound(getClientSettings().notificationMode),
+        () => getClientSettings().notificationSoundWhileLocked,
       );
     }
     if (

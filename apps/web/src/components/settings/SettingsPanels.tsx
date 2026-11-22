@@ -51,6 +51,7 @@ import {
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
+import { hasNotificationSound } from "../../threadNotifications";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import {
   readAppearanceModePreference,
@@ -523,6 +524,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.inAppNotificationsEnabled !== DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled
       ? [gt("In-app notifications")]
       : []),
+    ...(settings.notificationSoundWhileLocked !==
+    DEFAULT_UNIFIED_SETTINGS.notificationSoundWhileLocked
+      ? [gt("Sound while the screen is locked")]
+      : []),
     ...(settings.sidebarProjectGroupingMode !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
       ? [gt("Project Grouping")]
       : []),
@@ -700,6 +705,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
+      notificationSoundWhileLocked: DEFAULT_UNIFIED_SETTINGS.notificationSoundWhileLocked,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
       diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
@@ -840,6 +846,21 @@ export function GeneralSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection id="notifications" title={gt("Notifications")}>
         <NotificationSettings />
+        {isElectron && hasNotificationSound(settings.notificationMode) ? (
+          <SettingsRow
+            {...setting("notification-sound-while-locked")}
+            description={<T>Play thread notification sounds while this computer is locked.</T>}
+            control={
+              <Switch
+                checked={settings.notificationSoundWhileLocked}
+                onCheckedChange={(checked) =>
+                  updateSettings({ notificationSoundWhileLocked: checked })
+                }
+                aria-label={gt("Sound while the screen is locked")}
+              />
+            }
+          />
+        ) : null}
         <SettingsRow
           {...setting("in-app-notifications")}
           description={
