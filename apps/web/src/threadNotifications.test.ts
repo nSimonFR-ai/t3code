@@ -101,4 +101,41 @@ describe("playNotificationSound", () => {
 
     expect(audio.started).toBe(1);
   });
+
+  it("stays quiet while the screen is locked", async () => {
+    const detector = { screenState: "locked" as "locked" | "unlocked" };
+    vi.stubGlobal(
+      "IdleDetector",
+      class {
+        get screenState() {
+          return detector.screenState;
+        }
+        start() {
+          return Promise.resolve();
+        }
+      },
+    );
+    const { playNotificationSound } = await loadUnlocked();
+    await playNotificationSound("completion", () => true);
+    expect(audio.started).toBe(0);
+
+    detector.screenState = "unlocked";
+    await playNotificationSound("completion", () => true);
+    expect(audio.started).toBe(1);
+  });
+
+  it("still plays when the lock screen can't be watched", async () => {
+    vi.stubGlobal(
+      "IdleDetector",
+      class {
+        screenState = null;
+        start() {
+          return Promise.reject(new DOMException("denied", "NotAllowedError"));
+        }
+      },
+    );
+    const { playNotificationSound } = await loadUnlocked();
+    await playNotificationSound("completion", () => true);
+    expect(audio.started).toBe(1);
+  });
 });
