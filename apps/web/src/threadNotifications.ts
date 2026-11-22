@@ -101,37 +101,12 @@ function loadNotificationBuffer(context: AudioContext, url: string): Promise<Aud
   return buffer;
 }
 
-interface ScreenStateDetector {
-  readonly screenState: "locked" | "unlocked" | null;
-  start(options: { threshold: number }): Promise<void>;
-}
-let screenDetector: Promise<ScreenStateDetector | undefined> | undefined;
-
-/**
- * Chromium's Idle Detection API sees the OS lock screen. The desktop app grants it
- * without a prompt; a browser without the permission never starts it and stays loud.
- */
-function watchScreenLock() {
-  const Detector = (globalThis as { IdleDetector?: new () => ScreenStateDetector }).IdleDetector;
-  if (!Detector || screenDetector) return;
-  const detector = new Detector();
-  screenDetector = detector
-    .start({ threshold: 60_000 })
-    .then(() => detector)
-    .catch(() => undefined);
-}
-
-async function isScreenLocked() {
-  return (await screenDetector)?.screenState === "locked";
-}
-
 /** Called from a gesture so browsers allow later background playback. */
 export function unlockNotificationAudio() {
   const firstUnlock = audioContext === undefined;
   audioContext ??= new AudioContext();
   void audioContext.resume().catch(() => undefined);
   if (!firstUnlock) return;
-  watchScreenLock();
   // Fetch and decode during interaction so the first alert is ready when the thread finishes.
   for (const url of [completionUrl, inputUrl]) {
     void loadNotificationBuffer(audioContext, url).catch(() => undefined);
@@ -146,11 +121,8 @@ export async function playNotificationSound(
   const context = audioContext;
   const url = kind === "completion" ? completionUrl : inputUrl;
   try {
-    const [decoded, locked] = await Promise.all([
-      loadNotificationBuffer(context, url),
-      isScreenLocked(),
-    ]);
-    if (locked || !shouldPlay() || context.state !== "running") return;
+    const decoded = await loadNotificationBuffer(context, url);
+    if (!shouldPlay() || context.state !== "running") return;
     // Coalesce same-sound bursts after decode to avoid clipping; input and completion alerts keep separate slots.
     if (context.currentTime < (playingUntil.get(url) ?? 0)) return;
     const source = context.createBufferSource();
