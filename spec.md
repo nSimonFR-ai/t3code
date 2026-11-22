@@ -8,13 +8,13 @@ Current base: `v0.1.11` (stable channel).
 
 The fork used to carry the Issues stack (pingdotgg/t3code#19576). Upstream ships Issues itself since 0.1.11, so the fork dropped it there; `~/.t3/backups/t3-fork-exit.sql` converts a database written by the old fork builds before their first start on this one.
 
-## 1. Quiet while the screen is locked
+## 1. Sound while the screen is locked
 
-- R1.1 The desktop app MUST NOT play a thread notification sound while the OS session is locked. On macOS this includes a display asleep behind a password. Desktop notifications and the badge are unchanged.
+- R1.1 Settings → Notifications MUST offer "Sound while the screen is locked", on by default. Turned off, the desktop app MUST NOT play a thread notification sound while the OS session is locked (on macOS, including a display asleep behind a password). Desktop notifications and the badge are unchanged.
 - R1.2 The check MUST live in the web client only: the Mac app is upstream's with the fork's server and client swapped in (§3), so a change to Electron's main or preload process would not ship.
-- R1.3 Where the lock can't be watched (a browser without the idle-detection permission), sounds MUST still play. The client MUST NOT prompt for that permission.
+- R1.3 Where the lock can't be watched (a browser without the idle-detection permission), sounds MUST still play. The client MUST NOT prompt for that permission. The row shows only in the desktop app, with a sound mode selected.
 
-Where: `watchScreenLock` / `isScreenLocked` in `apps/web/src/threadNotifications.ts` (Chromium's `IdleDetector`, started on the first audio unlock; Electron grants it without a prompt because the main window has no permission handler). Check: "stays quiet while the screen is locked" and "still plays when the lock screen can't be watched" in `threadNotifications.test.ts`.
+Where: `notificationSoundWhileLocked` in `packages/contracts/src/settings.ts`, `isScreenLocked` in `apps/web/src/threadNotifications.ts` (Chromium's `IdleDetector`), the row in `components/settings/SettingsPanels.tsx`. Check: the "while the screen is locked" tests in `threadNotifications.test.ts`. Upstream: proposed in pingdotgg/t3code discussion #40771 (branch `feat/quiet-sound-when-locked`); drop this section if upstream ships it.
 
 ## 2. Claude artifact watchers
 
