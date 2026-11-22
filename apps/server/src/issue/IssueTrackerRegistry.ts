@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import type { IssueTrackerKind } from "@t3tools/contracts";
 import * as LinearDriver from "@t3tools/issue-tracker-linear/server/driver";
 import {
+  type IssueTrackerError,
   isStandaloneIssueTracker,
   type IssueTrackerApi,
   type StandaloneIssueTrackerApi,
@@ -11,6 +12,33 @@ import {
 
 import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 import * as IssueTrackerHostLive from "./IssueTrackerHostLive.ts";
+
+/**
+ * Runs each call of a standalone tracker with its target's workspace root in
+ * `IssueTrackerCredentialProject`, so the tracker signs it with that project's own key.
+ */
+export function withProjectCredentials(
+  tracker: StandaloneIssueTrackerApi,
+): StandaloneIssueTrackerApi {
+  const wrapped: Record<string, unknown> = { ...tracker };
+  for (const [name, value] of Object.entries(tracker)) {
+    if (typeof value !== "function") continue;
+    wrapped[name] = (...args: Array<unknown>) => {
+      const result = (value as (...a: Array<unknown>) => unknown).apply(tracker, args);
+      const first = args[0] as { readonly cwd?: unknown } | null | undefined;
+      const cwd = typeof first === "object" && first !== null ? first.cwd : undefined;
+      if (typeof cwd !== "string" || !Effect.isEffect(result)) return result;
+      // Every tracker method fails with IssueTrackerError; this only adds a service.
+      return Effect.provideService(
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off unsafeEffectTypeAssertion:off
+        result as Effect.Effect<unknown, IssueTrackerError>,
+        IssueTrackerHostLive.IssueTrackerCredentialProject,
+        cwd,
+      );
+    };
+  }
+  return wrapped as unknown as StandaloneIssueTrackerApi;
+}
 
 export class IssueTrackerRegistry extends Context.Service<
   IssueTrackerRegistry,
@@ -40,7 +68,7 @@ const STANDALONE_TRACKERS = [LinearDriver.make];
 
 const make = Effect.gen(function* () {
   const drivers = yield* BuiltInDrivers.SourceControlDrivers;
-  const standalone = yield* Effect.all(STANDALONE_TRACKERS);
+  const standalone = (yield* Effect.all(STANDALONE_TRACKERS)).map(withProjectCredentials);
   return fromTrackers([...drivers.flatMap(({ instance }) => instance.issues ?? []), ...standalone]);
 });
 

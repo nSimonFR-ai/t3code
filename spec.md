@@ -11,7 +11,7 @@ The fork used to carry the Issues stack (pingdotgg/t3code#19576). Upstream ships
 ## 1. Sound while the screen is locked
 
 - R1.1 Settings → Notifications MUST offer "Sound while the screen is locked", on by default. Turned off, the desktop app MUST NOT play a thread notification sound while the OS session is locked (on macOS, including a display asleep behind a password). Desktop notifications and the badge are unchanged.
-- R1.2 The check MUST live in the web client only: the Mac app is upstream's with the fork's server and client swapped in (§3), so a change to Electron's main or preload process would not ship.
+- R1.2 The check MUST live in the web client only: the Mac app is upstream's with the fork's server and client swapped in (§4), so a change to Electron's main or preload process would not ship.
 - R1.3 Where the lock can't be watched (a browser without the idle-detection permission), sounds MUST still play. The client MUST NOT prompt for that permission. The row shows only in the desktop app, with a sound mode selected.
 
 Where: `notificationSoundWhileLocked` in `packages/contracts/src/settings.ts`, `isScreenLocked` in `apps/web/src/threadNotifications.ts` (Chromium's `IdleDetector`), the row in `components/settings/SettingsPanels.tsx`. Check: the "while the screen is locked" tests in `threadNotifications.test.ts`. Upstream: proposed in pingdotgg/t3code discussion #40771 (branch `feat/quiet-sound-when-locked`); drop this section if upstream ships it.
@@ -22,7 +22,14 @@ Where: `notificationSoundWhileLocked` in `packages/contracts/src/settings.ts`, `
 
 Where: `isClaudeAmbientTaskStarted` and `handleSdkMessage` in `apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts`. Check: "does not keep the thread busy for Claude's ambient artifact watch" in `ClaudeAdapterV2.test.ts`. Upstream: pingdotgg/t3code#29331. Drop this section once upstream merges it.
 
-## 3. Build and release
+## 3. One Linear key per project
+
+- R3.1 A project MAY carry its own key for a standalone tracker (Linear), so two projects on one server reach two workspaces. A tracker call for a project MUST use that project's key when one is saved, else the server's shared key from Settings.
+- R3.2 Keys live in the secret store as `issue-tracker-<base64url kind>-project-<base64url workspace root>-token`; the shared key keeps upstream's name. No migration, no settings change: a server without project keys behaves as upstream. There is no UI yet: a project key is written to the secrets folder by hand, the project bound to its team in Settings.
+
+Where: `IssueTrackerCredentialProject` and `issueTrackerProjectSecretName` in `apps/server/src/issue/IssueTrackerHostLive.ts`; `withProjectCredentials` in `IssueTrackerRegistry.ts` runs each call with its target's `cwd` (the project's workspace root). Check: `IssueTrackerProjectCredentials.test.ts`. Upstream: pingdotgg/t3code#39179 (several Linear accounts, open); drop this section once it ships.
+
+## 4. Build and release
 
 - R3.1 Builds MUST bake in T3 Connect's public configuration: `T3CODE_RELAY_URL`, `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`, `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`. Without them, Connect is silently off.
 - R3.2 The branch MUST keep the fork's `.github/workflows`. The bot token can't push workflow changes.
